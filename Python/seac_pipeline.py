@@ -49,6 +49,13 @@ def mostrar_resumen(
             f"Orientacion de calle:      "
             f"{deteccion['angulo_calle_grados']:.2f} grados"
         )
+    if deteccion.get("distancia_recentrado_m") is None:
+        print("Recentrado respecto al GPS: no disponible")
+    else:
+        print(
+            f"Recentrado respecto al GPS: "
+            f"{deteccion['distancia_recentrado_m']:.3f} m"
+        )
     print(
         f"Secciones validas:         "
         f"{deteccion['cantidad_secciones_validas']} de "
@@ -150,6 +157,8 @@ def ejecutar_pipeline(args: argparse.Namespace) -> Path:
             "canny_bajo_usado": deteccion["canny_bajo_usado"],
             "canny_alto_usado": deteccion["canny_alto_usado"],
             "radio_roi_px": deteccion["radio_roi_px"],
+            "centro_ancla_px": deteccion.get("centro_ancla_px"),
+            "distancia_recentrado_m": deteccion.get("distancia_recentrado_m"),
             "angulo_calle_grados": deteccion["angulo_calle_grados"],
             "confianza_orientacion": deteccion["confianza_orientacion"],
             "cantidad_secciones_candidatas": deteccion[
@@ -199,11 +208,11 @@ def crear_parser() -> argparse.ArgumentParser:
     parser.add_argument("--roi-metros", type=float, default=20.0)
     parser.add_argument("--canny-bajo", type=int, default=None)
     parser.add_argument("--canny-alto", type=int, default=None)
-    parser.add_argument("--longitud-minima-m", type=float, default=5.0)
+    parser.add_argument("--longitud-minima-m", type=float, default=4.0)
     parser.add_argument("--ancho-minimo-m", type=float, default=3.0)
     parser.add_argument("--ancho-maximo-m", type=float, default=12.0)
     parser.add_argument("--tolerancia-angulo", type=float, default=12.0)
-    parser.add_argument("--saturacion-maxima", type=int, default=115)
+    parser.add_argument("--saturacion-maxima", type=int, default=90)
     parser.add_argument("--textura-maxima", type=float, default=1000.0)
     parser.add_argument("--mostrar", action="store_true")
     return parser
