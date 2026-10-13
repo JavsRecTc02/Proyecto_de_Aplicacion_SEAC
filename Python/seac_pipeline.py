@@ -11,13 +11,13 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any
-
 import cv2
 from PIL import Image
 
 from imagenes_esri import crear_mosaico, dibujar_marcador, resolucion_metros_por_pixel
 from estimacion_ancho import detectar_bordes_calle
-from gps import analizar_mediciones, leer_mediciones
+from analisis_gps import analizar_mediciones, leer_mediciones
+from camara import generar_bloque_reporte
 
 def mostrar_resumen(
     analisis: dict[str, Any],
@@ -127,6 +127,7 @@ def ejecutar_pipeline(args: argparse.Namespace) -> Path:
         tolerancia_angulo_grados=args.tolerancia_angulo,
         saturacion_maxima=args.saturacion_maxima,
         textura_maxima=args.textura_maxima,
+        confianza_minima_reintento=args.confianza_minima_reintento,
     )
 
     cv2.imwrite(str(salida / "03_contraste_grises.png"), deteccion["gris_contraste"])
@@ -136,6 +137,41 @@ def ejecutar_pipeline(args: argparse.Namespace) -> Path:
         str(salida / "06_secciones_transversales.png"),
         deteccion["resultado_visual"],
     )
+
+    # La cámara es una auditoría: NO modifica el ancho obtenido por satélite.
+    # Reutilizamos las mismas coordenadas promedio de esta ejecución.
+    if getattr(args, "sin_camara", False):
+        auditoria_camara = {
+            "disponible": False,
+            "motivo": "captura_deshabilitada",
+        }
+    else:
+        print("Capturando fotografía de auditoría...")
+        try:
+            auditoria_camara = generar_bloque_reporte(
+                indice_camara=getattr(args, "indice_camara", 0),
+                carpeta_salida=str(salida),
+                latitud=latitud,
+                longitud=longitud,
+                ancho_estimado_metros=deteccion["ancho_estimado_m"],
+                usar_autoexposicion=not getattr(args, "sin_autoexposicion", False),
+            )
+        except Exception as error:
+            # Una cámara desconectada no invalida el análisis satelital.
+            auditoria_camara = {
+                "disponible": False,
+                "motivo": "error_captura",
+                "detalle": str(error),
+            }
+            print(f"[camara] Aviso: {error}")
+
+    # Trazabilidad: los metadatos de la foto corresponden al GPS promedio.
+    auditoria_camara["latitud"] = latitud
+    auditoria_camara["longitud"] = longitud
+    if auditoria_camara["disponible"]:
+        print(f"[camara] Foto guardada: {auditoria_camara['ruta_foto_referencia']}")
+    else:
+        print(f"[camara] Sin foto de auditoría: {auditoria_camara.get('motivo', 'desconocido')}")
 
     reporte = {
         "fuente": "Esri World Imagery",
@@ -152,15 +188,23 @@ def ejecutar_pipeline(args: argparse.Namespace) -> Path:
             "alto": mosaico.height * metros_por_pixel,
         },
         "analisis_gps": analisis,
+        "camara": auditoria_camara,
         "deteccion": {
             "cantidad_segmentos_hough": deteccion["cantidad_lineas"],
             "canny_bajo_usado": deteccion["canny_bajo_usado"],
             "canny_alto_usado": deteccion["canny_alto_usado"],
             "radio_roi_px": deteccion["radio_roi_px"],
+            "roi_metros_usado": deteccion.get("roi_metros_usado"),
+            "roi_candidatos": deteccion.get("roi_candidatos"),
+            "roi_ambiguo": deteccion.get("roi_ambiguo"),
             "centro_ancla_px": deteccion.get("centro_ancla_px"),
             "distancia_recentrado_m": deteccion.get("distancia_recentrado_m"),
             "angulo_calle_grados": deteccion["angulo_calle_grados"],
             "confianza_orientacion": deteccion["confianza_orientacion"],
+            "intensidad_calle_referencia": deteccion.get("intensidad_calle_referencia"),
+            "tolerancia_gris_usada": deteccion.get("tolerancia_gris_usada"),
+            "pareja_global": deteccion.get("pareja_global"),
+            "motivo_fallo_pareja": deteccion.get("motivo_fallo_pareja"),
             "cantidad_secciones_candidatas": deteccion[
                 "cantidad_secciones_candidatas"
             ],
@@ -177,6 +221,12 @@ def ejecutar_pipeline(args: argparse.Namespace) -> Path:
             "la fotografia. Los bordes y el ancho deben validarse."
         ),
     }
+    # El PDF se crea ÚNICAMENTE desde el botón «Generar informe» de la GUI
+    # (o desde reporte.py en una ejecución independiente).
+    # El pipeline solo almacena la información y las imágenes originales.
+    reporte["reporte_pdf"] = None
+    reporte["estado_pdf"] = "pendiente"
+
     with (salida / "reporte.json").open("w", encoding="utf-8") as archivo_reporte:
         json.dump(reporte, archivo_reporte, indent=2, ensure_ascii=False)
 
@@ -214,6 +264,13 @@ def crear_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tolerancia-angulo", type=float, default=12.0)
     parser.add_argument("--saturacion-maxima", type=int, default=90)
     parser.add_argument("--textura-maxima", type=float, default=1000.0)
+    parser.add_argument("--confianza-minima-reintento", type=float, default=0.45)
+    parser.add_argument("--indice-camara", type=int, default=0,
+                        help="Índice de cámara OpenCV (predeterminado: 0).")
+    parser.add_argument("--sin-camara", action="store_true",
+                        help="Ejecuta sin intentar capturar una foto de auditoría.")
+    parser.add_argument("--sin-autoexposicion", action="store_true",
+                        help="No prueba varias exposiciones al capturar la foto.")
     parser.add_argument("--mostrar", action="store_true")
     return parser
 
@@ -231,6 +288,10 @@ def validar_argumentos(args: argparse.Namespace) -> None:
         raise ValueError("La saturacion maxima debe estar entre 0 y 255.")
     if args.textura_maxima <= 0:
         raise ValueError("La textura maxima debe ser mayor que cero.")
+    if not 0.0 <= args.confianza_minima_reintento <= 1.0:
+        raise ValueError("La confianza minima de reintento debe estar entre 0 y 1.")
+    if getattr(args, "indice_camara", 0) < 0:
+        raise ValueError("El índice de cámara no puede ser negativo.")
     for nombre in ("canny_bajo", "canny_alto"):
         valor = getattr(args, nombre)
         if valor is not None and not 0 <= valor <= 255:

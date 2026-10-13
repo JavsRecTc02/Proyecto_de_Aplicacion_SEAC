@@ -2,9 +2,11 @@
 
 Canny + Hough detectan bordes y orientación. Después se selecciona UNA
 pareja global de bordes de calle usando transición visual, ancho estable,
-solapamiento longitudinal, continuidad, tono de gris (calle vs. acera) y
-bordes internos. Las 13 secciones posteriores quedan bloqueadas a esa
-pareja para evitar saltar a aceras, parqueos u otras líneas paralelas.
+solapamiento longitudinal, continuidad, tono de gris (calle vs. acera,
+tanto el promedio como su consistencia interna), respaldo de doble línea
+(firma de cordón) y bordes internos. Las 13 secciones posteriores quedan
+bloqueadas a esa pareja para evitar saltar a aceras, parqueos u otras
+líneas paralelas.
 """
 
 from __future__ import annotations
@@ -405,7 +407,42 @@ def fuerza_borde_interno(
     return 0.65 * cambio + 0.35 * continuidad
 
 
-def similitud_intensidad_franja(
+def respaldo_doble_linea(
+    seg: dict[str, Any],
+    alineadas: list[dict[str, Any]],
+    lado_interior: int,
+    distancia_min_m: float = 0.08,
+    distancia_max_m: float = 0.55,
+) -> float:
+    """Busca una segunda línea paralela y muy cercana al lado exterior de `seg`.
+
+    El borde real calle/acera casi siempre genera dos líneas de Canny muy
+    pegadas (el filo del cordón y la unión con el caño), mientras que una
+    grieta o cambio de tono aislado dentro de una sola superficie no suele
+    tener esa compañera tan cercana. Esto favorece bordes con "firma de
+    cordón" sobre líneas sueltas, sin volver a correr Hough.
+    """
+    mejor = 0.0
+    for otro in alineadas:
+        if otro is seg:
+            continue
+        inicio, final, solapado = solapamiento_segmentos(seg, otro)
+        if solapado < 1.5:
+            continue
+        s_medio = (inicio + final) / 2.0
+        # Distancia lateral firmada hacia el lado EXTERIOR de la calle
+        # (opuesto al interior), para no duplicar lo que ya mide
+        # fuerza_borde_interno del lado de adentro.
+        offset_exterior = -lado_interior * (
+            lateral_en_s(otro, s_medio) - lateral_en_s(seg, s_medio)
+        )
+        if not distancia_min_m <= offset_exterior <= distancia_max_m:
+            continue
+        mejor = max(mejor, min(1.0, solapado / 4.0))
+    return mejor
+
+
+def medir_intensidad_franja(
     contraste: np.ndarray,
     gps: np.ndarray,
     direccion: np.ndarray,
@@ -414,25 +451,42 @@ def similitud_intensidad_franja(
     der: dict[str, Any],
     inicio: float,
     final: float,
-    intensidad_calle: float,
     mpp: float,
-    tolerancia_gris: float,
-) -> float:
-    """Compara el tono de gris interior del par contra el tono real de asfalto.
-
-    Una acera de concreto suele pasar el mismo filtro de saturacion/brillo
-    que el asfalto, pero casi siempre tiene un tono de gris distinto una vez
-    que se compara contra `intensidad_calle` (ver intensidad_referencia_calle).
-    """
+    n_muestras: int = 6,
+) -> np.ndarray:
+    """Gris muestreado una sola vez en el centro de la franja del par."""
     if final <= inicio:
-        return 0.0
-    valores = []
-    for s_m in np.linspace(inicio, final, 5):
+        return np.empty(0, dtype=np.float64)
+    valores = np.empty(n_muestras, dtype=np.float64)
+    for i, s_m in enumerate(np.linspace(inicio, final, n_muestras)):
         d_centro = (lateral_en_s(izq, float(s_m)) + lateral_en_s(der, float(s_m))) / 2.0
         p = gps + direccion * (s_m / mpp) + normal * (d_centro / mpp)
-        valores.append(valor_vecindad(contraste, p))
+        valores[i] = valor_vecindad(contraste, p)
+    return valores
+
+
+def similitud_intensidad(
+    valores: np.ndarray, intensidad_calle: float, tolerancia_gris: float
+) -> float:
+    """Que tan cerca esta el PROMEDIO de la franja del tono real de asfalto."""
+    if valores.size == 0:
+        return 0.0
     diferencia = abs(float(np.mean(valores)) - intensidad_calle)
     return max(0.0, 1.0 - diferencia / tolerancia_gris)
+
+
+def consistencia_intensidad(valores: np.ndarray, tolerancia_gris: float) -> float:
+    """Penaliza franjas que mezclan tonos a lo largo de si mismas.
+
+    Un promedio parecido al de la calle puede esconder que la mitad de la
+    franja es oscura (calle real) y la otra mitad es clara (acera): el
+    promedio calza, pero la DISPERSION delata la mezcla. Una sola
+    superficie homogenea deberia variar poco de tono a lo largo de si misma.
+    """
+    if valores.size < 2:
+        return 1.0
+    dispersion = float(np.std(valores))
+    return max(0.0, 1.0 - dispersion / (1.5 * tolerancia_gris))
 
 
 # ---------------------------------------------------------------------------
@@ -455,10 +509,10 @@ def evaluar_pareja(
     ancho_min: float,
     ancho_max: float,
     relajado: bool,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, str | None]:
     inicio, final, solapado = solapamiento_segmentos(a, b)
     if solapado < (1.8 if relajado else 2.8):
-        return None
+        return None, "solapamiento_insuficiente"
 
     muestras = np.linspace(inicio, final, 7)
     anchos = []
@@ -468,11 +522,11 @@ def evaluar_pareja(
 
     ancho = float(np.median(anchos))
     if not ancho_min <= ancho <= ancho_max:
-        return None
+        return None, "ancho_fuera_de_rango"
 
     mad = float(np.median(np.abs(np.asarray(anchos) - ancho)))
     if mad > (1.20 if relajado else 0.85):
-        return None
+        return None, "ancho_inconsistente"
     consistencia = max(0.0, 1.0 - mad / max(1.25, 0.20 * ancho))
 
     s_mid = (inicio + final) / 2.0
@@ -485,10 +539,11 @@ def evaluar_pareja(
     t_der = transicion_promedio(der, -1, inicio, final, mascara, gps, direccion, normal, mpp)
     transicion = (t_izq + t_der) / 2.0
 
-    similitud_gris = similitud_intensidad_franja(
-        contraste, gps, direccion, normal, izq, der, inicio, final,
-        intensidad_calle, mpp, tolerancia_gris,
+    valores_gris = medir_intensidad_franja(
+        contraste, gps, direccion, normal, izq, der, inicio, final, mpp,
     )
+    similitud_gris = similitud_intensidad(valores_gris, intensidad_calle, tolerancia_gris)
+    consistencia_gris = consistencia_intensidad(valores_gris, tolerancia_gris)
 
     longitud_min = min(izq["longitud_m"], der["longitud_m"])
     solap_rel = min(1.0, solapado / max(longitud_min, 1e-9))
@@ -498,12 +553,12 @@ def evaluar_pareja(
     distancia_gps = 0.0 if d_izq_0 <= 0.0 <= d_der_0 else min(abs(d_izq_0), abs(d_der_0))
     max_gps = 3.0 if relajado else 2.0
     if distancia_gps > max_gps:
-        return None
+        return None, "lejos_del_gps"
 
     distancia_long = 0.0 if inicio <= 0.0 <= final else min(abs(inicio), abs(final))
     max_long = 7.0 if relajado else 5.0
     if distancia_long > max_long:
-        return None
+        return None, "lejos_longitudinalmente"
 
     d_izq_mid, d_der_mid = lateral_en_s(izq, s_mid), lateral_en_s(der, s_mid)
     fuerzas = []
@@ -517,12 +572,18 @@ def evaluar_pareja(
             )
     fuerza_interna = max(fuerzas, default=0.0)
 
+    respaldo_cordon = (
+        respaldo_doble_linea(izq, alineadas, +1) + respaldo_doble_linea(der, alineadas, -1)
+    ) / 2.0
+
     puntaje = (
-        0.26 * transicion
-        + 0.26 * consistencia
-        + 0.16 * solap_rel
-        + 0.16 * continuidad
-        + 0.16 * similitud_gris
+        0.22 * transicion
+        + 0.22 * consistencia
+        + 0.12 * solap_rel
+        + 0.12 * continuidad
+        + 0.13 * similitud_gris
+        + 0.09 * consistencia_gris
+        + 0.10 * respaldo_cordon
         - 0.12 * fuerza_interna
         - 0.08 * min(1.0, distancia_gps / max_gps)
         - 0.05 * min(1.0, distancia_long / max_long)
@@ -541,10 +602,12 @@ def evaluar_pareja(
         "transicion_derecha": t_der,
         "transicion_visual": transicion,
         "similitud_gris": similitud_gris,
+        "consistencia_gris": consistencia_gris,
+        "respaldo_cordon": respaldo_cordon,
         "fuerza_borde_interno": fuerza_interna,
         "distancia_gps_calle_m": distancia_gps,
         "puntaje": float(puntaje),
-    }
+    }, None
 
 
 def seleccionar_pareja_global(
@@ -559,7 +622,7 @@ def seleccionar_pareja_global(
     ancho_min: float,
     ancho_max: float,
     tolerancia_grados: float,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], dict[str, Any] | None, list[dict[str, Any]]]:
     direccion = np.array([math.cos(angulo), math.sin(angulo)], dtype=float)
     normal = np.array([-direccion[1], direccion[0]], dtype=float)
     tol = math.radians(tolerancia_grados * 1.35)
@@ -570,24 +633,49 @@ def seleccionar_pareja_global(
         if diferencia_angulos(l["angulo"], angulo) <= tol
     ]
     if len(alineadas) < 2:
-        return None, alineadas
+        return None, alineadas, {"motivo": "menos_de_2_lineas_alineadas"}, []
 
-    def buscar(relajado: bool) -> dict[str, Any] | None:
+    def resumen_candidato(c: dict[str, Any]) -> dict[str, Any]:
+        # Solo las metricas de puntaje, sin las lineas completas: liviano
+        # para poder guardar el top-3 sin inflar el reporte.
+        claves = (
+            "ancho_mediano_m", "consistencia_ancho", "transicion_visual",
+            "similitud_gris", "consistencia_gris", "respaldo_cordon",
+            "fuerza_borde_interno", "distancia_gps_calle_m", "puntaje",
+        )
+        return {k: c[k] for k in claves}
+
+    def buscar(relajado: bool) -> tuple[dict[str, Any] | None, dict[str, int], list[dict[str, Any]]]:
         mejor, mejor_puntaje = None, -math.inf
+        motivos: dict[str, int] = {}
+        top: list[dict[str, Any]] = []
         for i, a in enumerate(alineadas):
             for b in alineadas[i + 1 :]:
-                candidato = evaluar_pareja(
+                candidato, motivo = evaluar_pareja(
                     a, b, alineadas, mascara, contraste, intensidad_calle, tolerancia_gris,
                     gps, direccion, normal, mpp, ancho_min, ancho_max, relajado,
                 )
-                if candidato is not None and candidato["puntaje"] > mejor_puntaje:
-                    mejor, mejor_puntaje = candidato, candidato["puntaje"]
-        return mejor
+                if candidato is not None:
+                    top.append(resumen_candidato(candidato))
+                    top.sort(key=lambda r: r["puntaje"], reverse=True)
+                    del top[3:]
+                    if candidato["puntaje"] > mejor_puntaje:
+                        mejor, mejor_puntaje = candidato, candidato["puntaje"]
+                elif motivo is not None:
+                    motivos[motivo] = motivos.get(motivo, 0) + 1
+        return mejor, motivos, top
 
-    mejor = buscar(False)
+    mejor, motivos_estricto, top = buscar(False)
+    motivos_relajado: dict[str, int] = {}
     if mejor is None:
-        mejor = buscar(True)
-    return mejor, alineadas
+        mejor, motivos_relajado, top = buscar(True)
+
+    motivo_fallo = None
+    if mejor is None:
+        motivo_fallo = {"estricto": motivos_estricto, "relajado": motivos_relajado}
+    return mejor, alineadas, motivo_fallo, top
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -734,186 +822,245 @@ def detectar_bordes_calle(
     saturacion_maxima: int,
     textura_maxima: float,
     radio_orientacion_local_m: float = 4.0,
+    confianza_minima_reintento: float = 0.45,
 ) -> dict[str, Any]:
-    """Estima el ancho usando dos bordes globales y 13 cortes bloqueados."""
+    """Estima el ancho usando dos bordes globales y 13 cortes bloqueados.
+
+    Si a la primera pasada (con `roi_metros`) no se encuentra pareja, O SI
+    se encuentra pero con `confianza` por debajo de `confianza_minima_reintento`,
+    se reintenta UNA vez con un ROI mas chico (60% del original, piso 8 m):
+    un ROI muy grande puede sumar ruido de lineas ajenas (parqueos, cruces
+    peatonales) y terminar promediando calle con acera; uno mas chico
+    reduce ese ruido a costa de tener menos lineas disponibles. Entre las
+    pasadas que sí encontraron pareja, se usa la de mayor `confianza`. Si
+    dos pasadas exitosas dan anchos que difieren mas de 1 m, se marca
+    `roi_ambiguo=True` en vez de decidir en silencio. No se vuelve a
+    descargar nada: es el mismo mosaico ya en memoria.
+    """
     del radio_orientacion_local_m  # Se conserva por compatibilidad con versiones previas.
 
-    bgr = cv2.cvtColor(np.asarray(mosaico), cv2.COLOR_RGB2BGR)
-    centro = (int(round(posicion_gps[0])), int(round(posicion_gps[1])))
-    gps = np.asarray(posicion_gps, dtype=float)
-    radio_roi_px = max(10, int(round(roi_metros / metros_por_pixel)))
+    def _procesar(roi_m: float, canny_bajo: int | None, canny_alto: int | None) -> dict[str, Any]:
+        bgr = cv2.cvtColor(np.asarray(mosaico), cv2.COLOR_RGB2BGR)
+        centro = (int(round(posicion_gps[0])), int(round(posicion_gps[1])))
+        gps = np.asarray(posicion_gps, dtype=float)
+        radio_roi_px = max(10, int(round(roi_m / metros_por_pixel)))
 
-    mascara_roi = np.zeros(bgr.shape[:2], dtype=np.uint8)
-    cv2.circle(mascara_roi, centro, radio_roi_px, 255, thickness=-1)
+        mascara_roi = np.zeros(bgr.shape[:2], dtype=np.uint8)
+        cv2.circle(mascara_roi, centro, radio_roi_px, 255, thickness=-1)
 
-    filtrada, gris, mascara_asfalto = crear_mascara_asfalto(
-        bgr, mascara_roi, saturacion_maxima, textura_maxima
-    )
-    contraste, bordes, canny_bajo, canny_alto = calcular_bordes(
-        gris, mascara_roi, mascara_asfalto, canny_bajo, canny_alto
-    )
-    intensidad_calle, tolerancia_gris = intensidad_referencia_calle(
-        contraste, mascara_asfalto, mascara_roi
-    )
-
-    longitud_px = max(8, int(round(longitud_minima_m / metros_por_pixel)))
-    hough = cv2.HoughLinesP(
-        bordes,
-        rho=1,
-        theta=np.pi / 180.0,
-        threshold=20,
-        minLineLength=longitud_px,
-        maxLineGap=max(3, int(round(3.0 / metros_por_pixel))),
-    )
-
-    lineas = []
-    if hough is not None:
-        for linea in np.asarray(hough).reshape(-1, 4):
-            if not np.array_equal(linea[:2], linea[2:]):
-                lineas.append(datos_linea(linea, posicion_gps))
-
-    orientacion = estimar_orientacion_calle(
-        lineas, metros_por_pixel, roi_metros, tolerancia_angulo_grados
-    )
-
-    visual = filtrada.copy()
-    for linea in lineas:
-        dibujar_segmento(visual, linea, (0, 140, 255), 1)  # naranja: Hough
-    cv2.circle(visual, centro, radio_roi_px, (255, 200, 0), 2)  # cian: ROI
-    cv2.drawMarker(visual, centro, (255, 0, 0), cv2.MARKER_CROSS, 24, 2)  # azul: GPS
-
-    angulo_grados = None
-    confianza_orientacion = 0.0
-    pareja = None
-    alineadas = []
-    mediciones = []
-    validas = []
-    centro_ancla_px = None
-    distancia_recentrado_m = None
-
-    if orientacion is not None:
-        angulo, confianza_orientacion = orientacion
-        angulo_grados = math.degrees(angulo)
-        direccion = np.array([math.cos(angulo), math.sin(angulo)], dtype=float)
-        normal = np.array([-direccion[1], direccion[0]], dtype=float)
-
-        pareja, alineadas = seleccionar_pareja_global(
-            lineas, angulo, gps, metros_por_pixel, mascara_asfalto,
-            contraste, intensidad_calle, tolerancia_gris,
-            ancho_minimo_m, ancho_maximo_m, tolerancia_angulo_grados,
+        filtrada, gris, mascara_asfalto = crear_mascara_asfalto(
+            bgr, mascara_roi, saturacion_maxima, textura_maxima
+        )
+        contraste, bordes, canny_bajo, canny_alto = calcular_bordes(
+            gris, mascara_roi, mascara_asfalto, canny_bajo, canny_alto
+        )
+        intensidad_calle, tolerancia_gris = intensidad_referencia_calle(
+            contraste, mascara_asfalto, mascara_roi
         )
 
-        largo = int(round(8.0 / metros_por_pixel))
-        p1 = tuple(np.rint(gps - direccion * largo).astype(int))
-        p2 = tuple(np.rint(gps + direccion * largo).astype(int))
-        cv2.arrowedLine(visual, p1, p2, (255, 0, 255), 2)  # magenta: orientación
-
-        if pareja is not None:
-            dibujar_segmento(visual, pareja["borde_izquierdo"], (0, 0, 255), 4)  # rojo
-            dibujar_segmento(visual, pareja["borde_derecho"], (0, 255, 0), 4)  # verde
-
-            mediciones = medir_secciones_bloqueadas(
-                pareja, gps, angulo, bordes, mascara_asfalto, metros_por_pixel,
-                ancho_minimo_m, ancho_maximo_m,
-            )
-            validas = filtrar_mediciones_consistentes(mediciones)
-
-            d_izq = lateral_en_s(pareja["borde_izquierdo"], 0.0)
-            d_der = lateral_en_s(pareja["borde_derecho"], 0.0)
-            d_centro = (d_izq + d_der) / 2.0
-            centro_ancla = gps + normal * (d_centro / metros_por_pixel)
-            centro_ancla_px = (float(centro_ancla[0]), float(centro_ancla[1]))
-            distancia_recentrado_m = abs(float(d_centro))
-            cv2.drawMarker(
-                visual, tuple(np.rint(centro_ancla).astype(int)),
-                (0, 255, 255), cv2.MARKER_DIAMOND, 16, 2,
-            )
-
-    ids_validos = {id(m) for m in validas}
-    for m in mediciones:
-        es_valida = id(m) in ids_validos
-        color = (0, 255, 255) if es_valida else (150, 150, 150)  # amarillo / gris
-        grosor = 3 if es_valida else 1
-        a = tuple(np.rint(m["borde_1"]).astype(int))
-        b = tuple(np.rint(m["borde_2"]).astype(int))
-        cv2.line(visual, a, b, color, grosor, cv2.LINE_AA)
-
-    ancho_estimado = None
-    confianza = 0.0
-    consistencia = 0.0
-    cobertura = 0.0
-
-    if len(validas) >= 3:
-        anchos = np.asarray([m["ancho_m"] for m in validas], dtype=float)
-        ancho_estimado = float(np.median(anchos))
-        dispersion = float(np.std(anchos))
-        consistencia = max(0.0, 1.0 - dispersion / max(ancho_estimado, 1e-9))
-        cobertura = min(1.0, len(validas) / 7.0)
-        calidad_pareja = float(pareja["puntaje"]) if pareja is not None else 0.0
-        confianza = float(
-            consistencia * cobertura * confianza_orientacion
-            * max(0.0, min(1.0, calidad_pareja))
+        longitud_px = max(8, int(round(longitud_minima_m / metros_por_pixel)))
+        hough = cv2.HoughLinesP(
+            bordes,
+            rho=1,
+            theta=np.pi / 180.0,
+            threshold=20,
+            minLineLength=longitud_px,
+            maxLineGap=max(3, int(round(3.0 / metros_por_pixel))),
         )
-        nivel = "alta" if confianza >= 0.55 else "media" if confianza >= 0.30 else "baja"
-        texto = f"Ancho: {ancho_estimado:.2f} m | confianza {nivel}"
-        color_texto = (0, 255, 0)
-    else:
-        nivel = "insuficiente"
-        if orientacion is None:
-            texto = "No se pudo estimar la orientacion"
-        elif pareja is None:
-            texto = "No se encontro una pareja global de bordes"
+
+        lineas = []
+        if hough is not None:
+            for linea in np.asarray(hough).reshape(-1, 4):
+                if not np.array_equal(linea[:2], linea[2:]):
+                    lineas.append(datos_linea(linea, posicion_gps))
+
+        orientacion = estimar_orientacion_calle(
+            lineas, metros_por_pixel, roi_m, tolerancia_angulo_grados
+        )
+
+        visual = filtrada.copy()
+        for linea in lineas:
+            dibujar_segmento(visual, linea, (0, 140, 255), 1)  # naranja: Hough
+        cv2.circle(visual, centro, radio_roi_px, (255, 200, 0), 2)  # cian: ROI
+        cv2.drawMarker(visual, centro, (255, 0, 0), cv2.MARKER_CROSS, 24, 2)  # azul: GPS
+
+        angulo_grados = None
+        confianza_orientacion = 0.0
+        pareja = None
+        alineadas = []
+        mediciones = []
+        validas = []
+        centro_ancla_px = None
+        distancia_recentrado_m = None
+        motivo_fallo_pareja = None
+        candidatos_top: list[dict[str, Any]] = []
+
+        if orientacion is not None:
+            angulo, confianza_orientacion = orientacion
+            angulo_grados = math.degrees(angulo)
+            direccion = np.array([math.cos(angulo), math.sin(angulo)], dtype=float)
+            normal = np.array([-direccion[1], direccion[0]], dtype=float)
+
+            pareja, alineadas, motivo_fallo_pareja, candidatos_top = seleccionar_pareja_global(
+                lineas, angulo, gps, metros_por_pixel, mascara_asfalto,
+                contraste, intensidad_calle, tolerancia_gris,
+                ancho_minimo_m, ancho_maximo_m, tolerancia_angulo_grados,
+            )
+
+            largo = int(round(8.0 / metros_por_pixel))
+            p1 = tuple(np.rint(gps - direccion * largo).astype(int))
+            p2 = tuple(np.rint(gps + direccion * largo).astype(int))
+            cv2.arrowedLine(visual, p1, p2, (255, 0, 255), 2)  # magenta: orientación
+
+            if pareja is not None:
+                dibujar_segmento(visual, pareja["borde_izquierdo"], (0, 0, 255), 4)  # rojo
+                dibujar_segmento(visual, pareja["borde_derecho"], (0, 255, 0), 4)  # verde
+
+                mediciones = medir_secciones_bloqueadas(
+                    pareja, gps, angulo, bordes, mascara_asfalto, metros_por_pixel,
+                    ancho_minimo_m, ancho_maximo_m,
+                )
+                validas = filtrar_mediciones_consistentes(mediciones)
+
+                d_izq = lateral_en_s(pareja["borde_izquierdo"], 0.0)
+                d_der = lateral_en_s(pareja["borde_derecho"], 0.0)
+                d_centro = (d_izq + d_der) / 2.0
+                centro_ancla = gps + normal * (d_centro / metros_por_pixel)
+                centro_ancla_px = (float(centro_ancla[0]), float(centro_ancla[1]))
+                distancia_recentrado_m = abs(float(d_centro))
+                cv2.drawMarker(
+                    visual, tuple(np.rint(centro_ancla).astype(int)),
+                    (0, 255, 255), cv2.MARKER_DIAMOND, 16, 2,
+                )
+
+        ids_validos = {id(m) for m in validas}
+        for m in mediciones:
+            es_valida = id(m) in ids_validos
+            color = (0, 255, 255) if es_valida else (150, 150, 150)  # amarillo / gris
+            grosor = 3 if es_valida else 1
+            a = tuple(np.rint(m["borde_1"]).astype(int))
+            b = tuple(np.rint(m["borde_2"]).astype(int))
+            cv2.line(visual, a, b, color, grosor, cv2.LINE_AA)
+
+        ancho_estimado = None
+        confianza = 0.0
+        consistencia = 0.0
+        cobertura = 0.0
+
+        if len(validas) >= 3:
+            anchos = np.asarray([m["ancho_m"] for m in validas], dtype=float)
+            ancho_estimado = float(np.median(anchos))
+            dispersion = float(np.std(anchos))
+            consistencia = max(0.0, 1.0 - dispersion / max(ancho_estimado, 1e-9))
+            cobertura = min(1.0, len(validas) / 7.0)
+            calidad_pareja = float(pareja["puntaje"]) if pareja is not None else 0.0
+            confianza = float(
+                consistencia * cobertura * confianza_orientacion
+                * max(0.0, min(1.0, calidad_pareja))
+            )
+            nivel = "alta" if confianza >= 0.55 else "media" if confianza >= 0.30 else "baja"
+            texto = f"Ancho: {ancho_estimado:.2f} m | confianza {nivel}"
+            color_texto = (0, 255, 0)
         else:
-            texto = "No hay 3 secciones bloqueadas consistentes"
-        color_texto = (0, 0, 255)
+            nivel = "insuficiente"
+            if orientacion is None:
+                texto = "No se pudo estimar la orientacion"
+            elif pareja is None:
+                texto = "No se encontro una pareja global de bordes"
+            else:
+                texto = "No hay 3 secciones bloqueadas consistentes"
+            color_texto = (0, 0, 255)
 
-    cv2.putText(
-        visual, texto, (20, 35), cv2.FONT_HERSHEY_SIMPLEX,
-        0.7, color_texto, 2, cv2.LINE_AA,
-    )
+        cv2.putText(
+            visual, texto, (20, 35), cv2.FONT_HERSHEY_SIMPLEX,
+            0.7, color_texto, 2, cv2.LINE_AA,
+        )
 
-    diagnostico = None
-    if pareja is not None:
-        diagnostico = {
-            "ancho_hough_m": float(pareja["ancho_mediano_m"]),
-            "mad_ancho_m": float(pareja["mad_ancho_m"]),
-            "consistencia_ancho": float(pareja["consistencia_ancho"]),
-            "solapamiento_m": float(pareja["solapamiento_m"]),
-            "solapamiento_relativo": float(pareja["solapamiento_relativo"]),
-            "continuidad": float(pareja["continuidad"]),
-            "transicion_izquierda": float(pareja["transicion_izquierda"]),
-            "transicion_derecha": float(pareja["transicion_derecha"]),
-            "transicion_visual": float(pareja["transicion_visual"]),
-            "similitud_gris": float(pareja["similitud_gris"]),
-            "fuerza_borde_interno": float(pareja["fuerza_borde_interno"]),
-            "distancia_gps_calle_m": float(pareja["distancia_gps_calle_m"]),
-            "puntaje": float(pareja["puntaje"]),
+        diagnostico = None
+        if pareja is not None:
+            diagnostico = {
+                "ancho_hough_m": float(pareja["ancho_mediano_m"]),
+                "mad_ancho_m": float(pareja["mad_ancho_m"]),
+                "consistencia_ancho": float(pareja["consistencia_ancho"]),
+                "solapamiento_m": float(pareja["solapamiento_m"]),
+                "solapamiento_relativo": float(pareja["solapamiento_relativo"]),
+                "continuidad": float(pareja["continuidad"]),
+                "transicion_izquierda": float(pareja["transicion_izquierda"]),
+                "transicion_derecha": float(pareja["transicion_derecha"]),
+                "transicion_visual": float(pareja["transicion_visual"]),
+                "similitud_gris": float(pareja["similitud_gris"]),
+                "consistencia_gris": float(pareja["consistencia_gris"]),
+                "respaldo_cordon": float(pareja["respaldo_cordon"]),
+                "fuerza_borde_interno": float(pareja["fuerza_borde_interno"]),
+                "distancia_gps_calle_m": float(pareja["distancia_gps_calle_m"]),
+                "puntaje": float(pareja["puntaje"]),
+                # Los siguientes 2 mejores candidatos que NO ganaron, con el
+                # mismo desglose de puntaje (sin las lineas completas) para
+                # comparar por que perdieron sin adivinar.
+                "alternativas": candidatos_top[1:],
+            }
+
+        return {
+            "gris_contraste": contraste,
+            "mascara_asfalto": mascara_asfalto,
+            "bordes_canny": bordes,
+            "resultado_visual": visual,
+            "cantidad_lineas": len(lineas),
+            "cantidad_lineas_alineadas": len(alineadas),
+            "angulo_calle_grados": angulo_grados,
+            "confianza_orientacion": confianza_orientacion,
+            "intensidad_calle_referencia": intensidad_calle,
+            "tolerancia_gris_usada": tolerancia_gris,
+            "cantidad_secciones_candidatas": len(mediciones),
+            "cantidad_secciones_validas": len(validas),
+            "anchos_candidatos_m": [float(m["ancho_m"]) for m in mediciones],
+            "anchos_validos_m": [float(m["ancho_m"]) for m in validas],
+            "ancho_estimado_m": ancho_estimado,
+            "confianza": confianza,
+            "consistencia": consistencia,
+            "cobertura": cobertura,
+            "nivel_confianza": nivel,
+            "canny_bajo_usado": canny_bajo,
+            "canny_alto_usado": canny_alto,
+            "radio_roi_px": radio_roi_px,
+            "centro_ancla_px": centro_ancla_px,
+            "distancia_recentrado_m": distancia_recentrado_m,
+            "pareja_global": diagnostico,
+            "motivo_fallo_pareja": motivo_fallo_pareja,
         }
 
-    return {
-        "gris_contraste": contraste,
-        "mascara_asfalto": mascara_asfalto,
-        "bordes_canny": bordes,
-        "resultado_visual": visual,
-        "cantidad_lineas": len(lineas),
-        "cantidad_lineas_alineadas": len(alineadas),
-        "angulo_calle_grados": angulo_grados,
-        "confianza_orientacion": confianza_orientacion,
-        "intensidad_calle_referencia": intensidad_calle,
-        "tolerancia_gris_usada": tolerancia_gris,
-        "cantidad_secciones_candidatas": len(mediciones),
-        "cantidad_secciones_validas": len(validas),
-        "anchos_candidatos_m": [float(m["ancho_m"]) for m in mediciones],
-        "anchos_validos_m": [float(m["ancho_m"]) for m in validas],
-        "ancho_estimado_m": ancho_estimado,
-        "confianza": confianza,
-        "consistencia": consistencia,
-        "cobertura": cobertura,
-        "nivel_confianza": nivel,
-        "canny_bajo_usado": canny_bajo,
-        "canny_alto_usado": canny_alto,
-        "radio_roi_px": radio_roi_px,
-        "centro_ancla_px": centro_ancla_px,
-        "distancia_recentrado_m": distancia_recentrado_m,
-        "pareja_global": diagnostico,
-    }
+    intentos: list[tuple[float, dict[str, Any]]] = [
+        (roi_metros, _procesar(roi_metros, canny_bajo, canny_alto))
+    ]
+    primero = intentos[0][1]
+
+    necesita_reintento = (
+        primero["pareja_global"] is None
+        or primero["confianza"] < confianza_minima_reintento
+    )
+    if necesita_reintento:
+        roi_alterno = round(max(8.0, roi_metros * 0.6), 2)
+        if roi_alterno < roi_metros - 0.5:
+            intentos.append((roi_alterno, _procesar(roi_alterno, canny_bajo, canny_alto)))
+
+    exitosos = [(rm, r) for rm, r in intentos if r["pareja_global"] is not None]
+    if exitosos:
+        roi_usado, resultado = max(exitosos, key=lambda t: t[1]["confianza"])
+    else:
+        roi_usado, resultado = intentos[-1]
+
+    resultado["roi_metros_usado"] = roi_usado
+    resultado["roi_candidatos"] = [
+        {
+            "roi_metros": rm,
+            "ancho_estimado_m": r["ancho_estimado_m"],
+            "confianza": r["confianza"],
+            "secciones_validas": r["cantidad_secciones_validas"],
+            "secciones_candidatas": r["cantidad_secciones_candidatas"],
+        }
+        for rm, r in intentos
+    ]
+    anchos_ok = [r["ancho_estimado_m"] for _, r in exitosos if r["ancho_estimado_m"] is not None]
+    resultado["roi_ambiguo"] = len(anchos_ok) >= 2 and (max(anchos_ok) - min(anchos_ok)) > 1.0
+
+    return resultado
