@@ -1,332 +1,461 @@
-# SEAC: Sistema de estimación de ancho de una calle 
+# SEAC — Sistema de Estimación de Ancho de Calles
+
+**Proyecto de Aplicación de la Ingeniería en Computadores (CE-1114)**  
+**Instituto Tecnológico de Costa Rica (TEC) · II semestre de 2026**  
+**Desarrollado por:** Javier Tenorio Cervantes
 
 ## Descripción
 
-Este proyecto corresponde al desarrollo de un sistema automatizado para la estimación de parámetros físicos y geométricos de una calle, principalmente su **ancho**, utilizando  **geolocalización GPS, imágenes satelitales como método principal y el uso de **cámara** para complementar.
+El **Sistema de Estimación de Ancho de Calles (SEAC)** es un prototipo que estima el ancho de una vía a partir de su **ubicación GPS** y del **análisis geométrico de imágenes satelitales**. Utiliza una **Raspberry Pi 4**, un receptor **NEO-6M** y, de manera complementaria, una **cámara** para registrar evidencia visual de la escena analizada.
 
-El sistema busca complementar soluciones existentes de medición de velocidad vehicular basadas en modelos de detección como **YOLO**, proporcionando información sobre el entorno físico de la vía que permita mejorar la calibración y precisión de dichas estimaciones.
+El resultado principal es un **ancho estimado en metros**, acompañado de información geográfica, un indicador de confianza y evidencias del procesamiento. El sistema incluye una **interfaz gráfica en Tkinter**, salidas en **JSON** y la posibilidad de **generar un informe PDF** a solicitud del usuario.
 
-## La propuesta utiliza una arquitectura en la que la adquisición de datos puede realizarse mediante hardware embebido, mientras que el procesamiento y análisis de la información puede realizarse posteriormente en un sistema externo.
+El objetivo es proporcionar un parámetro geométrico que pueda apoyar la calibración de soluciones externas de estimación de velocidad vehicular, por ejemplo, aquellas basadas en **YOLO**. **SEAC no detecta vehículos ni calcula su velocidad**: su responsabilidad es estimar y entregar información sobre el ancho de la vía.
 
-# Arquitectura general
+> **Estado del proyecto:** prototipo funcional en desarrollo y evaluación. El ancho se calcula mediante imágenes satelitales; la fotografía de cámara se emplea actualmente como **evidencia de auditoría**, no para corregir numéricamente la estimación satelital. El resultado no sustituye una medición física certificada.
 
-Actualmente, el desarrollo se divide en varias etapas:
+## Contenido
 
-```text
-┌──────────────────────┐
-│      NEO-6M GPS      │
-└──────────┬───────────┘
-           │
-           │ Datos NMEA
-           ▼
-┌──────────────────────┐
-│       Python Rpi4    │
-│                      │
-│ Validación de datos  │
-│ GPS + satélites      │
-│ + HDOP               │
-└──────────┬───────────┘
-           │
-           │ 10 mediciones válidas
-           ▼
-┌──────────────────────┐
-│        Python        │
-│                      │
-│ Análisis estadístico │
-│ Promedio             │
-│ Dispersión           │
-│ Desviación           │
-└──────────┬───────────┘
-           │
-           │ Latitud/Longitud promedio
-           ▼
-┌──────────────────────┐
-│ Imágenes satelitales │
-│      Esri World      │
-│       Imagery        │
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│ Mosaico de teselas   │
-│        3 × 3         │
-│                      │
-│ + posición GPS       │
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│ Análisis geométrico  │
-│       de la vía      │
-└──────────────────────┘
-```
-
-La arquitectura final incorporará además una cámara para utilizar información visual de la escena vial, de acuerdo con los objetivos establecidos para el proyecto.
+1. [Características principales](#1-características-principales)
+2. [Arquitectura y flujo de funcionamiento](#2-arquitectura-y-flujo-de-funcionamiento)
+3. [Hardware y software](#3-hardware-y-software)
+4. [Organización del proyecto](#4-organización-del-proyecto)
+5. [Instalación y preparación](#5-instalación-y-preparación)
+6. [Ejecución del sistema](#6-ejecución-del-sistema)
+7. [Interfaz gráfica de usuario](#7-interfaz-gráfica-de-usuario)
+8. [Adquisición y procesamiento GPS](#8-adquisición-y-procesamiento-gps)
+9. [Obtención de imágenes satelitales](#9-obtención-de-imágenes-satelitales)
+10. [Algoritmo de estimación del ancho](#10-algoritmo-de-estimación-del-ancho)
+11. [Captura de cámara y auditoría visual](#11-captura-de-cámara-y-auditoría-visual)
+12. [Generación del informe PDF](#12-generación-del-informe-pdf)
+13. [Archivos de salida y reporte JSON](#13-archivos-de-salida-y-reporte-json)
+14. [Parámetros del pipeline](#14-parámetros-del-pipeline)
+15. [Limitaciones y criterios de evaluación](#15-limitaciones-y-criterios-de-evaluación)
+16. [Solución de problemas frecuentes](#16-solución-de-problemas-frecuentes)
+17. [Referencias y atribuciones](#17-referencias-y-atribuciones)
 
 ---
 
-# Etapa 1 — Adquisición de datos GPS
+## 1. Características principales
 
-## Hardware
-
-Para la adquisición de las coordenadas se utiliza un módulo **NEO-6M GPS**, conectado a la RaspBerry pi 4 mediante comunicación serial.
-
-La conexión utilizada actualmente es:
-
-| Componente   |        Rpi4    |
-| ------------ | -------------: |
-| NEO-6M TX    |          Pin RX|
-| NEO-6M RX    |          Pin TX|
-| Baud rate    |           9600 |
-| Comunicación | SoftwareSerial |
-
-La Rpi4 se encarga de recibir continuamente las sentencias NMEA generadas por el módulo GPS y procesarlas mediante la biblioteca `pymea2`.
+- **Adquisición GPS:** permite obtener nuevas mediciones del NEO-6M o reutilizar un archivo de coordenadas previamente adquirido.
+- **Procesamiento estadístico:** determina una ubicación representativa a partir de un conjunto de mediciones válidas e informa su dispersión.
+- **Georreferenciación:** descarga teselas de **Esri World Imagery**, construye un mosaico y localiza el punto GPS dentro de la imagen.
+- **Estimación geométrica:** analiza tonos de gris, textura, bordes y segmentos lineales para localizar los límites de la vía y estimar su ancho en metros.
+- **Evaluación de confianza:** informa la calidad de la estimación e identifica escenarios ambiguos.
+- **Fotografía de auditoría:** obtiene una imagen de la cámara y le superpone fecha, ubicación GPS y ancho estimado cuando se dispone de esos datos.
+- **Interfaz gráfica:** reúne coordenadas, métricas GPS, imagen satelital, foto de cámara, resultado y acciones de ejecución.
+- **Evidencias y reportes:** conserva las imágenes intermedias y el `reporte.json`; puede generar un PDF sin repetir la estimación.
 
 ---
 
-# Validación de las mediciones GPS
+## 2. Arquitectura y flujo de funcionamiento
 
-No todas las mediciones proporcionadas por el GPS se consideran confiables para el sistema.
-
-Antes de almacenar una medición, el programa verifica que estén disponibles:
-
-* Coordenadas GPS válidas.
-* Número de satélites válido.
-* Valor de HDOP válido.
-
-Posteriormente se aplican criterios mínimos de calidad:
+El software utiliza una arquitectura **modular, de procesamiento secuencial por etapas**. La interfaz es una capa de presentación que reutiliza la lógica de `seac_pipeline.py`.
 
 ```text
-Satélites ≥ 4
-HDOP ≤ 2.0
+                      ┌───────────────────────────┐
+                      │     Interfaz Tkinter      │
+                      │     interfaz_seac.py      │
+                      └─────────────┬─────────────┘
+                                    │
+                  ┌─────────────────┴─────────────────┐
+                  │                                   │
+          Usar coordenadas                    Actualizar coordenadas
+             existentes                                │
+                  │                            GPS.py + NEO-6M
+                  │                                   │
+                  └─────────────────┬─────────────────┘
+                                    │
+                           mediciones_gps.txt
+                                    │
+                                    ▼
+                       ┌────────────────────────┐
+                       │    seac_pipeline.py    │
+                       │  Coordinador del flujo │
+                       └────────────┬───────────┘
+                                    │
+                              gps.py
+                        Análisis estadístico
+                                    │
+                         Coordenada promedio
+                                    ▼
+                               esri.py
+                  Teselas Esri + mosaico + escala
+                                    │
+                                    ▼
+                         estimacion_ancho.py
+                  Detección de límites de la vía
+                                    │
+                           Ancho + confianza
+                                    │
+                ┌───────────────────┴──────────────────┐
+                │                                      │
+                ▼                                      ▼
+         Evidencia satelital                        camara.py
+        + resultados geométricos                Foto de auditoría
+                │                                      │
+                └───────────────────┬──────────────────┘
+                                    │
+                            resultados_seac/
+                        Imágenes + reporte.json
+                                    │
+                         Solicitud del usuario
+                                    ▼
+                               reporte.py
+                             Informe PDF
 ```
 
-Además, las mediciones válidas deben estar separadas por un intervalo mínimo de:
+La **cámara es una fuente complementaria y opcional**. Una falla de captura no implica necesariamente que deba fallar el análisis satelital; su disponibilidad y el motivo del fallo se pueden registrar en el reporte.
 
-```text
-2 segundos
-```
+**Flujo resumido de una ejecución:**
 
-Esto evita tomar múltiples muestras prácticamente simultáneas y permite obtener una serie de mediciones distribuidas temporalmente.
+1. Seleccionar el origen de las coordenadas GPS.
+2. Leer las mediciones y calcular la posición promedio.
+3. Obtener y georreferenciar el mosaico satelital.
+4. Detectar la orientación y los dos bordes de la calle.
+5. Medir varias secciones transversales y calcular el ancho y su confianza.
+6. Registrar, si está habilitada y disponible, una fotografía de referencia.
+7. Guardar las evidencias y mostrar el resultado en la interfaz.
+8. **Opcionalmente**, generar un informe PDF con las salidas ya existentes.
 
 ---
 
-# Obtención de las 10 mediciones
+## 3. Hardware y software
 
-El sistema establece como objetivo:
+### 3.1. Hardware
 
-```cpp
-const int MEDICIONES_OBJETIVO = 10;
+| Componente | Función |
+| --- | --- |
+| **Raspberry Pi 4** | Ejecuta los programas Python y coordina los periféricos. |
+| **GPS NEO-6M** | Proporciona coordenadas y datos de calidad de posicionamiento a través de comunicación serial. |
+| **Cámara USB o compatible con OpenCV** | Captura una fotografía de la escena vial para auditoría. |
+| **Conexión a Internet** | Permite obtener las imágenes desde el servicio satelital de Esri. |
+| **Pantalla o sesión gráfica remota** | Permite utilizar la interfaz Tkinter. |
+
+El módulo GPS se comunica mediante **UART**. En un montaje UART convencional, el **TX del GPS** se conecta al **RX de la Raspberry Pi**, con **tierra común**; las conexiones restantes dependen del modelo y del método de comunicación utilizado. Se deben respetar los niveles eléctricos y el voltaje de alimentación indicados por el fabricante del módulo. La configuración serial documentada inicialmente utiliza **9600 baudios**; verificarla en `GPS.py` y en el dispositivo antes de operar.
+
+### 3.2. Software y bibliotecas
+
+El prototipo utiliza **Python 3** y las siguientes herramientas:
+
+| Herramienta | Uso principal |
+| --- | --- |
+| **OpenCV (`cv2`)** | Captura de cámara y procesamiento de imágenes. |
+| **NumPy** | Operaciones numéricas y estadísticas. |
+| **Pillow (`PIL`)** | Carga y escalado de imágenes en la interfaz y el PDF. |
+| **Tkinter / `ttk`** | Interfaz gráfica de escritorio. |
+| **ReportLab** | Generación de documentos PDF. |
+| **`v4l2-ctl`** (Linux, opcional) | Ajuste de exposición, balance de blancos y ganancia de cámaras compatibles. |
+| **Bibliotecas de GPS y puerto serial** | Lectura de mensajes NMEA y del dispositivo, según la implementación de `GPS.py`. |
+
+Los módulos de la biblioteca estándar, como `json`, `argparse`, `subprocess`, `pathlib`, `threading`, `math`, `os` y `datetime`, no requieren instalación mediante `pip`.
+
+---
+
+## 4. Organización del proyecto
+
+Esta es la organización lógica de los archivos utilizados por el sistema. Algunos nombres y carpetas pueden variar según la versión del repositorio; los módulos **deben conservar los nombres importados por el código**.
+
+```text
+SEAC/
+├── README.md
+├── GPS.py                       # Adquisición de nuevas mediciones NEO-6M
+├── gps.py                       # Lectura y análisis estadístico del archivo GPS
+├── esri.py                      # Descarga y georreferenciación del mosaico
+├── estimacion_ancho.py          # Algoritmo de estimación geométrica
+├── seac_pipeline.py             # Coordinación de las etapas del sistema
+├── camara.py                    # Captura y fotografía de auditoría
+├── interfaz_seac.py             # Interfaz gráfica en Tkinter
+├── reporte.py                   # Generación independiente del informe PDF
+├── acerca_de.py                # Ventana informativa de la interfaz
+├── mediciones_gps.txt           # Mediciones disponibles (generadas o existentes)
+├── docs/
+│   ├── interfaz_text.png        # Captura de la interfaz (agregada al repositorio)
+│   ├── mediciones.jpeg
+│   ├── tabla_promedio.png
+│   └── imagen_sat.png
+└── resultados_seac/             # Archivos generados al ejecutar el pipeline
 ```
 
-Por lo tanto, el Arduino continúa recibiendo y evaluando datos hasta obtener **10 mediciones que cumplan todos los criterios de validación**.
+**Responsabilidades:**
 
-Cada medición se transmite por el puerto serial utilizando el siguiente formato:
+- `GPS.py` **adquiere** coordenadas desde el hardware; `gps.py` **analiza** las coordenadas almacenadas. Son dos módulos diferentes.
+- `seac_pipeline.py` coordina el procesamiento y produce los archivos de salida.
+- `interfaz_seac.py` presenta los resultados y ejecuta las operaciones sin duplicar el algoritmo.
+- `camara.py` documenta visualmente la escena, pero no sustituye el análisis satelital.
+- `reporte.py` transforma el JSON y las imágenes existentes en un PDF; **no vuelve a ejecutar** la descarga ni la estimación.
+
+> **Importante:** la interfaz importa `acerca_de.py` y `seac_pipeline.py`, y busca `GPS.py` junto a `interfaz_seac.py`. Para desplegar el proyecto deben estar disponibles esos archivos y los demás módulos referenciados por el pipeline.
+
+---
+
+## 5. Instalación y preparación
+
+### 5.1. Requisitos previos
+
+- Python 3 instalado.
+- Cámara reconocida por OpenCV, si se desea obtener fotografías.
+- Receptor NEO-6M conectado y accesible, si se van a actualizar coordenadas.
+- Internet disponible para descargar el mosaico satelital.
+- Un entorno gráfico operativo para iniciar la interfaz.
+
+En Raspberry Pi OS o Linux basado en Debian se pueden instalar las dependencias de sistema con:
+
+```bash
+sudo apt update
+sudo apt install python3-pip python3-venv python3-tk v4l-utils
+```
+
+Desde la carpeta del proyecto, es recomendable utilizar un entorno virtual:
+
+```bash
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+python3 -m pip install numpy opencv-python Pillow reportlab
+```
+
+Las dependencias específicas de `GPS.py` (por ejemplo, `pyserial` o `pynmea2`, **si ese archivo las importa**) deben instalarse también:
+
+```bash
+python3 -m pip install pyserial pynmea2
+```
+
+La instalación de estas dos últimas bibliotecas depende de la implementación real del módulo GPS. Si el repositorio dispone de un `requirements.txt` actualizado, puede utilizarse como fuente principal de dependencias.
+
+### 5.2. Comprobar el entorno
+
+Verificar que las bibliotecas principales se puedan importar:
+
+```bash
+python3 -c "import cv2, numpy, PIL, reportlab, tkinter; print('Dependencias principales disponibles')"
+```
+
+Para comprobar la detección de una cámara en Linux:
+
+```bash
+ls /dev/video*
+v4l2-ctl --list-devices
+```
+
+Para acceder a la interfaz por **SSH con reenvío X11**, se necesita un servidor gráfico X en el equipo cliente y una configuración SSH que permita el reenvío. Por ejemplo:
+
+```bash
+ssh -X usuario@direccion-de-la-raspberry
+```
+
+La disponibilidad de X11 y la capacidad de abrir visores externos (por ejemplo, el visor PDF) dependen de la configuración de la sesión remota.
+
+---
+
+## 6. Ejecución del sistema
+
+### 6.1. Ejecución desde la interfaz gráfica (recomendada)
+
+Desde la raíz del proyecto:
+
+```bash
+python3 interfaz_seac.py mediciones_gps.txt
+```
+
+La aplicación utiliza el mismo analizador de argumentos del pipeline. El archivo `mediciones_gps.txt` es necesario al seleccionar **Usar últimas coordenadas**; si se selecciona **Actualizar coordenadas**, la interfaz ejecuta `GPS.py` para producir el archivo antes de iniciar la estimación.
+
+Una vez abierta la interfaz, elegir una de las dos opciones del botón **Iniciar**:
+
+- **Usar últimas coordenadas:** procesa el archivo GPS indicado sin volver a consultar el receptor.
+- **Actualizar coordenadas:** obtiene nuevas mediciones del NEO-6M y, una vez completada la adquisición, continúa automáticamente con el pipeline.
+
+Al finalizar se muestran las métricas GPS, la imagen satelital, la fotografía de cámara cuando existe y el ancho calculado.
+
+### 6.2. Ejecución por línea de comandos
+
+Para ejecutar únicamente el pipeline:
+
+```bash
+python3 seac_pipeline.py mediciones_gps.txt
+```
+
+Ejemplo con parámetros de análisis:
+
+```bash
+python3 seac_pipeline.py mediciones_gps.txt --roi-metros 20 --ancho-maximo-m 10 --mostrar
+```
+
+Para ver las opciones realmente aceptadas por la versión instalada:
+
+```bash
+python3 seac_pipeline.py --help
+python3 interfaz_seac.py --help
+```
+
+### 6.3. Adquisición GPS independiente
+
+La actualización de coordenadas también puede ejecutarse sin abrir la interfaz:
+
+```bash
+python3 GPS.py
+```
+
+Este módulo debe finalizar correctamente y dejar disponibles las mediciones en `mediciones_gps.txt` para que el pipeline pueda analizarlas. El nombre y ubicación del archivo de salida deben ser compatibles con la configuración utilizada.
+
+---
+
+## 7. Interfaz gráfica de usuario
+
+La interfaz está implementada en **Tkinter / `ttk`** dentro de `interfaz_seac.py`. Separa la presentación de los resultados del procesamiento; invoca directamente `ejecutar_pipeline()` desde `seac_pipeline.py` y lee los archivos generados en la carpeta de resultados.
+
+![Interfaz gráfica del SEAC](docs/interfaz_text.png)
+
+*Figura. Interfaz gráfica del SEAC. La imagen debe añadirse en `docs/interfaz_text.png` para que GitHub la muestre correctamente.*
+
+### 7.1. Distribución de los paneles
+
+| Panel | Información presentada |
+| --- | --- |
+| **1. Ubicación y métricas** | Cantidad de mediciones, latitud y longitud promedio, distancias de dispersión GPS, resolución cartográfica y métricas adicionales cuando están disponibles. |
+| **2. Imagen satelital** | Mosaico descargado con la posición GPS marcada (`02_imagen_con_gps.png`). |
+| **3. Imagen de cámara** | Fotografía de auditoría, si se capturó. Incluye la opción **Ampliar foto de auditoría** para verla con mayor detalle. |
+| **4. Resultado** | Ancho estimado en metros, confianza del algoritmo, orientación y cantidad de secciones transversales válidas. |
+
+La ventana incorpora una barra inferior que informa el estado actual de la operación: lista para iniciar, adquiriendo GPS, procesando, estimación completada, generación del PDF o error.
+
+### 7.2. Botones y acciones
+
+| Control | Comportamiento |
+| --- | --- |
+| **Iniciar → Usar últimas coordenadas** | Valida los argumentos, comprueba que exista el archivo de entrada y ejecuta el pipeline usando esas mediciones. |
+| **Iniciar → Actualizar coordenadas** | Ejecuta `GPS.py`, comprueba su terminación y el archivo de mediciones, y después inicia la estimación. |
+| **Reiniciar** | Limpia los datos e imágenes mostrados en la ventana. **No elimina** las evidencias guardadas en disco. |
+| **Generar informe** | Se habilita después de completar el análisis y genera el PDF a partir de sus resultados. |
+| **Acerca de** | Abre la información del sistema mediante `acerca_de.py`. |
+| **Salir** | Cierra la aplicación. |
+| **Análisis satelital** | Abre `06_secciones_transversales.png` en una ventana independiente. |
+| **Ampliar foto de auditoría** | Muestra la fotografía de cámara en un tamaño mayor, si está disponible. |
+
+### 7.3. Opciones de inicio y actualización GPS
+
+**Opción A — Usar últimas coordenadas**
+
+```text
+Seleccionar "Usar últimas coordenadas"
+                ↓
+Leer mediciones_gps.txt existente
+                ↓
+Ejecutar seac_pipeline.py
+                ↓
+Mostrar resultados
+```
+
+Esta opción es útil para repetir pruebas del algoritmo sobre una misma ubicación sin esperar una nueva adquisición GPS.
+
+**Opción B — Actualizar coordenadas**
+
+```text
+Seleccionar "Actualizar coordenadas"
+                ↓
+Ejecutar GPS.py (NEO-6M)
+                ↓
+Generar/actualizar mediciones_gps.txt
+                ↓
+Comprobar finalización y archivo
+                ↓
+Ejecutar seac_pipeline.py
+                ↓
+Mostrar resultados
+```
+
+La interfaz espera **10 registros GPS** antes de continuar. Específicamente, después de que termina `GPS.py`, verifica que su proceso haya finalizado sin error, que exista `mediciones_gps.txt` y que contenga **al menos 10 líneas no vacías**. La adquisición y validación técnica de cada registro corresponden a `GPS.py` y al procesamiento GPS; la comprobación de la interfaz, por sí sola, no certifica la precisión del posicionamiento.
+
+Si ocurre un error en la actualización, **no se inicia el procesamiento satelital** y se muestra un mensaje explicativo.
+
+### 7.4. Ejecución sin bloquear la ventana
+
+La interfaz utiliza hilos para realizar la adquisición GPS, el pipeline y la generación del PDF sin bloquear el ciclo principal de Tkinter. Mientras una operación está en curso, desactiva temporalmente los controles correspondientes y actualiza el estado visible para evitar ejecuciones duplicadas.
+
+### 7.5. Comportamiento del informe y de la cámara
+
+- El archivo **PDF no se crea automáticamente** al terminar una estimación; el usuario debe pulsar **Generar informe**.
+- El botón de informe permanece deshabilitado hasta que exista una ejecución con `reporte.json`.
+- Si no se obtuvo fotografía de cámara, el panel comunica el motivo registrado. La ausencia de la foto no invalida automáticamente el ancho satelital.
+- Al realizar una nueva ejecución se limpia la fotografía anterior para evitar asociar visualmente una escena vieja con una medición nueva.
+
+---
+
+## 8. Adquisición y procesamiento GPS
+
+El NEO-6M proporciona datos de posicionamiento mediante mensajes **NMEA**. El flujo distingue la **adquisición**, gestionada por `GPS.py`, del **análisis estadístico**, realizado por `gps.py`.
+
+### 8.1. Mediciones y validación
+
+Se utiliza un conjunto objetivo de **10 mediciones GPS válidas**. La documentación inicial del proyecto contempla la revisión de coordenadas, satélites y **HDOP** (dilución horizontal de la precisión), además de un intervalo entre muestras para evitar registrar varias lecturas prácticamente simultáneas. Los umbrales exactos que estén vigentes deben comprobarse en el `GPS.py` desplegado.
+
+El formato de registro utilizado por el procesamiento es:
 
 ```text
 GPS,indice,latitud,longitud,satelites,HDOP
 ```
 
-Por ejemplo:
+| Campo | Descripción |
+| --- | --- |
+| `GPS` | Identificador del tipo de registro. |
+| `indice` | Número o consecutivo de la medición. |
+| `latitud` / `longitud` | Coordenadas geográficas de la muestra. |
+| `satelites` | Número de satélites reportados. |
+| `HDOP` | Indicador de calidad geométrica horizontal. |
 
-![Imagen satelital](docs/mediciones.jpeg)
+![Ejemplo de mediciones GPS](docs/mediciones.jpeg)
 
-Cada registro contiene:
+### 8.2. Análisis estadístico
 
-| Campo       | Descripción                       |
-| ----------- | --------------------------------- |
-| `GPS`       | Identificador del tipo de dato    |
-| `indice`    | Número de medición                |
-| `latitud`   | Latitud registrada                |
-| `longitud`  | Longitud registrada               |
-| `satelites` | Satélites utilizados/recibidos    |
-| `HDOP`      | Indicador de precisión geométrica |
+En lugar de depender de una sola lectura GPS, `gps.py` procesa el conjunto de mediciones disponibles y calcula una posición representativa mediante la **latitud y longitud promedio**.
 
-Cuando se obtienen las 10 mediciones, Arduino transmite:
+Entre las métricas del procesamiento GPS se encuentran:
 
-```text
-FIN_MEDICIONES
-```
+- Cantidad de mediciones disponibles y válidas.
+- Latitud y longitud promedio.
+- Valores mínimos y máximos de las coordenadas.
+- Desviación estándar y rangos de coordenadas.
+- Distancia de cada medición al punto promedio.
+- Distancia promedio y máxima, expresadas en metros.
 
-y detiene la adquisición.
+El número de satélites y el HDOP forman parte de los datos registrados, pero **no equivalen por sí solos a la coordenada final**. La interfaz muestra métricas adicionales de satélites, HDOP o dispersión únicamente si el reporte las incluye.
 
----
+![Estadísticas de coordenadas GPS](docs/tabla_promedio.png)
 
-# Etapa 2 — Procesamiento de los datos GPS
-
-Una vez obtenidas las mediciones GPS, los datos son procesados mediante **Python**.
-
-Esta etapa se encuentra implementada en el módulo:
-
-```text
-gps.py
-```
-
-El objetivo de esta etapa es validar las mediciones obtenidas y determinar una posición representativa de la ubicación donde se realizó la captura.
-
-En lugar de utilizar directamente una única medición, el sistema procesa el conjunto de mediciones almacenadas en el archivo de entrada.
-
-Cada registro GPS contiene:
-
-```text
-GPS,número,latitud,longitud,satélites,HDOP
-```
-
-El módulo verifica que las coordenadas sean válidas antes de utilizarlas.
+> **Consideración geométrica:** el promedio GPS no tiene que coincidir exactamente con el centro de la calle. Una medición tomada desde una acera o cerca del borde vial puede situar el punto de referencia fuera de la calzada. El algoritmo de estimación intenta tolerar ese desplazamiento dentro de ciertos límites.
 
 ---
 
-# Análisis de las mediciones GPS
+## 9. Obtención de imágenes satelitales
 
-A partir de las mediciones válidas se calculan diferentes parámetros que permiten conocer la posición representativa y la dispersión de los datos.
+El módulo `esri.py` utiliza las coordenadas promedio para localizar la región de interés mediante **Esri World Imagery**, a través de su servicio de teselas.
 
-Actualmente se calculan:
+### 9.1. Coordenadas, teselas y mosaico
 
-* Cantidad de mediciones válidas.
-* Latitud promedio.
-* Longitud promedio.
-* Latitud mínima.
-* Latitud máxima.
-* Longitud mínima.
-* Longitud máxima.
-* Desviación estándar de la latitud.
-* Desviación estándar de la longitud.
-* Rango de latitud expresado en metros.
-* Rango de longitud expresado en metros.
-* Distancia de cada medición con respecto a la coordenada promedio.
-* Distancia promedio con respecto al punto promedio.
-* Distancia máxima con respecto al punto promedio.
-
-El archivo de entrada también contiene el número de satélites y el valor HDOP de cada medición. Estos datos son leídos y almacenados por el módulo GPS, aunque actualmente no son utilizados para calcular la coordenada promedio.
-
-> **Nota importante:** el sistema **no asume** que el punto GPS promedio cae exactamente sobre el centro de la calle. En campo, quien mide puede estar parado en la acera, en un camellón o en el borde de una plaza midiendo hacia el otro lado. Varias de las señales descritas más adelante (sección de "Selección de la pareja global de bordes") existen justamente para no depender de ese supuesto de forma rígida.
-
----
-
-# Coordenada promedio
-
-A partir de las mediciones válidas se obtiene una coordenada representativa mediante:
+Las coordenadas geográficas se transforman a la cuadrícula utilizada por **Web Mercator**:
 
 ```text
-Latitud promedio
-Longitud promedio
+Latitud y longitud promedio
+              ↓
+       Web Mercator
+              ↓
+  Posición global en píxeles
+              ↓
+     Tesela central X/Y
+              ↓
+      Mosaico de imagen
 ```
 
-El proceso puede representarse de la siguiente manera:
+Una tesela tiene **256 × 256 píxeles** y se identifica mediante su nivel de zoom (`z`) y las coordenadas (`x`, `y`) del mosaico global.
 
-```text
-Mediciones GPS
-      ↓
-Validación
-      ↓
-Latitudes y longitudes válidas
-      ↓
-Promedio
-      ↓
-Coordenada representativa
-```
+La configuración documentada por defecto utiliza:
 
-Esta coordenada se utiliza posteriormente como referencia para obtener la imagen satelital correspondiente.
-
-![Imagen tabla](docs/tabla_promedio.png)
-
----
-
-# Etapa 3 — Obtención de imágenes satelitales
-
-Una vez determinada la coordenada promedio, el sistema utiliza la latitud y longitud para localizar la región correspondiente dentro del sistema de teselas de Esri.
-
-Esta etapa se encuentra implementada en el módulo:
-
-```text
-esri.py
-```
-
-La fuente utilizada actualmente es:
-
-```text
-Esri World Imagery
-```
-
-mediante el servicio:
-
-```text
-ArcGIS World_Imagery
-```
-
----
-
-# ¿Qué es una tesela?
-
-Los servicios de mapas dividen las imágenes del planeta en pequeñas imágenes cuadradas denominadas **teselas** (*tiles*).
-
-Cada tesela utilizada por el sistema tiene:
-
-```text
-256 × 256 píxeles
-```
-
-y se identifica mediante tres parámetros:
-
-```text
-X → posición horizontal
-Y → posición vertical
-Z → nivel de zoom
-```
-
-El nivel de zoom determina el nivel de detalle de la imagen.
-
-A mayor valor de `zoom`, mayor nivel de detalle y menor área geográfica representada por cada tesela.
-
-Actualmente el valor predeterminado es:
-
-```text
-Zoom = 19
-```
-
----
-
-# Conversión de coordenadas GPS
-
-Para determinar qué parte del mapa corresponde a la coordenada GPS promedio, el sistema transforma la posición geográfica utilizando la proyección **Web Mercator**.
-
-El proceso es:
-
-```text
-Latitud / Longitud
-        ↓
-Web Mercator
-        ↓
-Píxel global
-        ↓
-Tesela X/Y
-```
-
-La función:
-
-```python
-latlon_a_pixel_global()
-```
-
-convierte la latitud y longitud en una posición dentro de la cuadrícula global de píxeles utilizada por el servicio de mapas.
-
-Posteriormente, a partir de esos valores se determina la tesela que contiene la coordenada GPS.
-
----
-
-# Generación del mosaico satelital
-
-Una única tesela puede no proporcionar suficiente contexto alrededor de la posición GPS.
-
-Por esta razón, con la configuración predeterminada se utiliza un radio de una tesela alrededor de la tesela central.
-
-Esto produce un mosaico de:
-
-```text
-3 × 3 teselas
-```
-
-distribuidas de la siguiente manera:
+| Configuración | Valor |
+| --- | --- |
+| Nivel de zoom | `19` |
+| Radio de teselas | `1` |
+| Mosaico resultante | `3 × 3` teselas |
+| Dimensión del mosaico | `768 × 768` píxeles |
 
 ```text
 ┌───────────┬───────────┬───────────┐
@@ -338,628 +467,472 @@ distribuidas de la siguiente manera:
 └───────────┴───────────┴───────────┘
 ```
 
-Como cada tesela posee:
+El tamaño de mosaico puede variar mediante `--radio-teselas`.
+
+### 9.2. Posición GPS y escala cartográfica
+
+El sistema transforma el punto GPS a una posición `(x, y)` dentro del mosaico y genera una copia de la imagen con un marcador visual. También calcula la **resolución cartográfica aproximada**, expresada en **metros por píxel**, para convertir las distancias medidas en la imagen a unidades físicas.
 
 ```text
-256 × 256 píxeles
+Ancho estimado [m] = distancia transversal [px] × resolución [m/px]
 ```
 
-el mosaico generado tiene:
+La imagen sin marcador se conserva para el procesamiento, porque el símbolo de GPS podría introducir bordes artificiales.
 
-```text
-768 × 768 píxeles
-```
+![Referencia satelital y punto GPS](docs/imagen_sat.png)
 
-El número de teselas puede modificarse mediante el parámetro:
-
-```text
---radio-teselas
-```
+> **Precisión:** la resolución cartográfica calculada para Web Mercator no garantiza que las fotografías de Esri tengan idéntica resolución espacial nativa, fecha de captura o precisión posicional. Es importante verificar las estimaciones con referencias en campo.
 
 ---
 
-# Ubicación de la coordenada GPS dentro del mosaico
+## 10. Algoritmo de estimación del ancho
 
-Además de obtener la imagen satelital, el sistema determina exactamente en qué posición del mosaico se encuentra la coordenada GPS promedio.
+El módulo `estimacion_ancho.py` determina dos límites laterales de la vía y mide su separación. La dificultad principal no consiste simplemente en detectar líneas, sino en **seleccionar los dos bordes que realmente delimitan la calle**: aceras, estacionamientos, sombras y marcas pintadas también generan bordes visibles en la imagen.
+
+### 10.1. Flujo del algoritmo
+
+```text
+Mosaico satelital + punto GPS + escala
+                   ↓
+       Región de interés (ROI)
+                   ↓
+    Máscara aproximada de asfalto
+                   ↓
+  Tono de gris de referencia de calle
+                   ↓
+      Bordes Canny + HoughLinesP
+                   ↓
+       Orientación predominante
+                   ↓
+   Selección de pareja global de bordes
+                   ↓
+  Reintento con ROI menor, si se requiere
+                   ↓
+    13 secciones transversales guiadas
+                   ↓
+   Filtrado de mediciones inconsistentes
+                   ↓
+       Mediana de anchos en metros
+                   ↓
+         Confianza + diagnóstico
+```
+
+### 10.2. Región de interés (ROI)
+
+El procesamiento comienza con una región aproximadamente circular alrededor del punto GPS. Su tamaño inicial se establece mediante `--roi-metros` (documentado por defecto en **20 m**). Limitar el análisis reduce la presencia de estructuras alejadas de la ubicación de interés.
+
+### 10.3. Máscara aproximada de asfalto
+
+Se genera una máscara de superficies compatibles con la vía combinando:
+
+- Saturación de color.
+- Cromaticidad de los canales **a/b** del espacio **Lab**.
+- Textura local, evaluada por variaciones del nivel de gris.
+- Un límite superior de brillo **adaptativo mediante Otsu**.
+- Un límite inferior de brillo para reducir falsos positivos causados por sombras muy oscuras.
+- Operaciones morfológicas de apertura y cierre.
+
+La máscara es **aproximada**: puede incluir tanto asfalto como aceras de concreto. Por eso no debe interpretarse como una segmentación perfecta de la calzada. La decisión final se apoya además en bordes, orientación y consistencia geométrica.
+
+### 10.4. Intensidad de referencia de la calle
+
+Dentro de la zona candidata, el algoritmo estima el tono de gris representativo del asfalto. Cuando se distinguen dos grupos de intensidad, considera el grupo más oscuro como referencia de la superficie vial; si la separación no es clara, puede utilizar la mediana como respaldo.
+
+La **tolerancia de gris** se adapta a la dispersión de intensidades de la imagen. Esto ayuda a evitar que una única tolerancia fija confunda diferentes condiciones de iluminación.
+
+### 10.5. Detección de bordes y orientación
+
+Se emplean **Canny** para localizar cambios de intensidad y **HoughLinesP** para extraer segmentos lineales. Las orientaciones de los segmentos cercanos a la zona de interés permiten identificar la dirección longitudinal predominante de la vía.
+
+Los parámetros `--canny-bajo` y `--canny-alto` permiten establecer umbrales manuales; si se omiten, el flujo documentado utiliza valores calculados según la imagen.
+
+### 10.6. Selección de la pareja global de bordes
+
+En vez de elegir dos líneas independientes en cada medición transversal, se busca **una pareja global** que represente los dos límites laterales de la misma vía. Las parejas candidatas se evalúan considerando varias señales:
+
+| Señal | Qué evalúa | Para qué se utiliza |
+| --- | --- | --- |
+| Consistencia de ancho | Variación de la separación entre segmentos. | Favorecer bordes aproximadamente paralelos. |
+| Transición visual | Diferencia de aspecto dentro y fuera de cada límite. | Distinguir una frontera física de una marca interior. |
+| Solapamiento y continuidad | Longitud y coincidencia longitudinal de los segmentos. | Evitar parejas formadas por fragmentos aislados. |
+| Similitud de gris | Correspondencia del interior con el tono de asfalto. | Reducir la confusión con aceras y otras superficies. |
+| Consistencia de gris | Variabilidad del interior de la franja. | Detectar mezclas de materiales distintos. |
+| Respaldo de doble línea | Presencia de líneas cercanas compatibles con cordón o caño. | Identificar indicios estructurales de borde vial. |
+| Fuerza de bordes internos | Soporte de bordes detectados entre los dos candidatos. | Penalizar parejas que encierran un límite más plausible. |
+| Cercanía al GPS | Separación lateral y longitudinal respecto al punto medido. | Priorizar la calle asociada a la ubicación registrada. |
+
+El algoritmo aplica restricciones geométricas —como ancho permitido, solapamiento y distancia— y selecciona la combinación con mejor puntuación entre las candidatas válidas.
+
+Si no se encuentra una pareja aceptable, el reporte puede registrar motivos de rechazo en `motivo_fallo_pareja`, como `ancho_fuera_de_rango`, `solapamiento_insuficiente`, `lejos_del_gps` o `lejos_longitudinalmente`. También puede registrar las parejas alternativas mejor puntuadas para facilitar la revisión.
+
+### 10.7. Reintento automático con otro ROI
+
+Una región muy grande puede introducir cruces, parqueos u otras líneas ajenas a la calle; una muy pequeña puede perder los límites reales. Por eso, el algoritmo documentado:
+
+1. Prueba con el ROI inicial.
+2. Si no encuentra una pareja o la confianza es menor que `--confianza-minima-reintento` (documentado por defecto en **0.45**), realiza un segundo intento con un ROI reducido al **60 %**, con un mínimo de **8 m**.
+3. Compara los intentos que generaron una pareja y selecciona el resultado de mayor confianza.
+4. Si dos intentos exitosos difieren en más de **1 m** de ancho, puede registrar la situación como `roi_ambiguo` para revisión.
+
+Los intentos quedan documentados en `roi_candidatos` y `roi_metros_usado`.
+
+### 10.8. Secciones transversales y ancho final
+
+La pareja global seleccionada guía la búsqueda de bordes en **13 secciones transversales**, distribuidas aproximadamente entre **−6 m y +6 m** a lo largo de la calle.
+
+En cada sección se buscan bordes cerca de las posiciones previstas por la pareja global, en lugar de aceptar cualquier transición intensa. Este criterio reduce el riesgo de medir una acera, una marca vial o un objeto cercano.
+
+Las distancias se convierten de píxeles a metros, se comprueba su consistencia y se descartan posibles valores atípicos mediante una estrategia basada en la **mediana** y las desviaciones respecto a ella. El proceso documentado exige al menos **3 secciones consistentes** para establecer un ancho final.
+
+### 10.9. Confianza y resultado
+
+La confianza considera conjuntamente:
+
+- La consistencia entre los anchos de las secciones válidas.
+- La cobertura: cuántas secciones aportaron mediciones útiles.
+- La confiabilidad de la orientación detectada.
+- La calidad de la pareja global de bordes seleccionada.
+
+El reporte puede clasificar el resultado como **Alta**, **Media**, **Baja** o **Insuficiente**. Una confianza alta es una señal interna de consistencia del análisis, **no una garantía de exactitud frente a una medición real**.
+
+---
+
+## 11. Captura de cámara y auditoría visual
+
+El módulo `camara.py` incorpora una nueva capacidad de **registro fotográfico de referencia**. Su finalidad actual es permitir que una persona revise visualmente la escena vial correspondiente a la ejecución.
+
+### 11.1. Captura y selección de exposición
+
+La cámara se abre mediante **OpenCV**. La implementación disponible utiliza por defecto:
+
+| Parámetro | Valor utilizado |
+| --- | --- |
+| Índice de cámara | `0` |
+| Resolución solicitada | `640 × 480` |
+| Formato solicitado | `YUYV` |
+| Cuadros iniciales de estabilización | `35` |
+| Exposiciones candidatas | `150`, `40`, `15`, `5` (controles del dispositivo) |
+| Brillo objetivo de la selección | `130` sobre gris de `0–255` |
+| Margen aceptable | `±25` |
+| Cuadros después de un cambio de exposición | `8` |
+
+El módulo prueba las exposiciones candidatas y conserva la captura cuyo brillo promedio se acerque más al objetivo; puede detener la búsqueda cuando encuentra un resultado suficientemente próximo. En Linux intenta aplicar los ajustes mediante **`v4l2-ctl`**. La aceptación y las unidades efectivas de cada control dependen del modelo de cámara.
+
+También existe un modo de captura sin barrido de exposición, útil para pruebas o cámaras que no admiten esos controles.
+
+### 11.2. Fotografía de auditoría
+
+Cuando la captura es exitosa, se guarda una fotografía JPEG con una banda informativa sobre la imagen. Según los datos disponibles, la banda muestra:
+
+- **Fecha y hora** de la fotografía.
+- **Latitud y longitud** promedio asociadas a la estimación.
+- **Ancho estimado** mediante el análisis satelital, en metros.
+
+El nombre del archivo sigue un patrón similar a:
+
+```text
+camara_referencia_med1_20261023_140000.jpg
+```
+
+El número de medición es opcional, por lo que el nombre también puede omitir el segmento `_med...`.
+
+> **Nota metodológica:** las coordenadas impresas en la foto corresponden al resultado GPS **asociado a la ejecución**. No constituyen una nueva medición GPS realizada exactamente en el instante de tomar la fotografía.
+
+### 11.3. Integración en el reporte
+
+`camara.py` puede generar un bloque de información como el siguiente:
+
+```json
+{
+  "disponible": true,
+  "ruta_foto_referencia": "ruta/a/la/fotografia.jpg",
+  "exposicion_utilizada": 40
+}
+```
+
+La ruta y el valor de exposición son ilustrativos. Si la captura falla, puede registrarse:
+
+```json
+{
+  "disponible": false,
+  "motivo": "no_se_pudo_capturar_imagen"
+}
+```
+
+La interfaz interpreta el bloque `camara` de `reporte.json`, muestra la foto cuando está disponible y habilita la opción de ampliarla. En caso contrario, presenta un mensaje indicando el motivo conocido.
+
+### 11.4. Prueba del módulo por separado
+
+Capturar una fotografía de prueba:
+
+```bash
+python3 camara.py --salida resultados_seac
+```
+
+Capturar una prueba incluyendo valores de referencia:
+
+```bash
+python3 camara.py \
+  --indice-camara 0 \
+  --salida resultados_seac \
+  --latitud 9.864000 \
+  --longitud -83.915000 \
+  --ancho-estimado 6.5
+```
+
+Desactivar la búsqueda automática de exposición:
+
+```bash
+python3 camara.py --salida resultados_seac --sin-autoexposicion
+```
+
+Estas pruebas producen una fotografía y muestran su bloque JSON; **no ejecutan el algoritmo de estimación**. Los valores geográficos del ejemplo son únicamente demostrativos.
+
+---
+
+## 12. Generación del informe PDF
+
+El módulo `reporte.py` crea un documento PDF **a partir del `reporte.json` y las imágenes que el pipeline ya generó**. No repite la adquisición GPS, la descarga satelital ni el cálculo del ancho.
+
+### 12.1. Generación desde la interfaz
 
 El procedimiento es:
 
-```text
-Coordenada GPS promedio
-          ↓
-Píxel global
-          ↓
-Origen del mosaico
-          ↓
-Píxel relativo dentro de la imagen
+1. Completar una ejecución del SEAC.
+2. Revisar el resultado en la interfaz.
+3. Pulsar **Generar informe**.
+4. Esperar a que aparezca el mensaje de confirmación.
+5. Seleccionar **Ver informe** para abrir el PDF con el visor configurado, o **Cerrar** para conservarlo en la carpeta de resultados.
+
+El PDF se crea **bajo demanda**. Al finalizar la generación desde la interfaz, esta también actualiza `reporte.json` con:
+
+```json
+{
+  "estado_pdf": "generado",
+  "reporte_pdf": "ruta/al/informe.pdf"
+}
 ```
 
-Como resultado se obtiene una posición:
+Estas claves se añaden a los datos preexistentes del reporte, no los reemplazan.
 
-```text
-(x, y)
-```
+### 12.2. Generación independiente
 
-que representa el punto GPS dentro de la imagen satelital.
-
-Esta posición funciona posteriormente como centro de referencia para el análisis de la vía (aunque, como se explica más adelante, no se asume que la calle esté centrada exactamente ahí).
-
----
-
-# Resolución cartográfica
-
-Para convertir las mediciones realizadas sobre la imagen desde píxeles hacia metros, el sistema calcula la resolución cartográfica local.
-
-La función:
-
-```python
-resolucion_metros_por_pixel()
-```
-
-calcula aproximadamente cuántos metros representa cada píxel para una latitud y nivel de zoom determinados.
-
-El resultado se expresa como:
-
-```text
-metros / píxel
-```
-
-Esta relación permite convertir posteriormente las distancias detectadas en la imagen a unidades reales.
-
----
-
-# Marcador de posición
-
-Para facilitar la comprobación visual, el sistema genera una copia del mosaico satelital con la posición GPS marcada.
-
-El marcador está compuesto por:
-
-* Un círculo.
-* Una cruz.
-* La posición correspondiente a la coordenada promedio.
-
-La imagen original sin marcador también se conserva, ya que es utilizada durante el procesamiento de imagen para evitar que el marcador interfiera con la detección de bordes.
-
-![Imagen satelital](docs/imagen_sat.png)
-
----
-
-# Etapa 4 — Estimación del ancho de la calle
-
-La estimación del ancho de la vía se encuentra implementada en el módulo:
-
-```text
-estimacion_ancho.py
-```
-
-Esta etapa utiliza la imagen satelital, la posición GPS y la resolución cartográfica obtenidas anteriormente.
-
-El problema principal que resuelve esta etapa **no es solamente "encontrar dos bordes"**, sino **encontrar los dos bordes correctos**: en calles con acera de concreto junto al asfalto, ambas superficies son grises y de baja saturación, así que un filtro de color por sí solo no basta para diferenciarlas. Buena parte del diseño de este módulo existe específicamente para resolver esa ambigüedad sin necesitar un modelo entrenado.
-
-El proceso general es:
-
-```text
-Imagen satelital
-        ↓
-Región de interés alrededor del GPS
-        ↓
-Máscara aproximada de asfalto (adaptativa por foto)
-        ↓
-Intensidad de referencia de la calle (tono real de asfalto)
-        ↓
-Detección de bordes (Canny) + segmentos (Hough)
-        ↓
-Estimación de orientación de la calle
-        ↓
-Selección de la PAREJA GLOBAL de bordes
-        ↓
-Reintento automático (ROI reducido) si la confianza es baja
-        ↓
-13 secciones transversales BLOQUEADAS a esa pareja
-        ↓
-Medición y conversión de píxeles a metros
-        ↓
-Filtrado de mediciones consistentes
-        ↓
-Ancho estimado + nivel de confianza
-```
-
----
-
-# Región de interés
-
-El sistema utiliza una región circular alrededor del punto GPS para limitar la zona de análisis.
-
-El tamaño de esta región se define mediante:
-
-```text
---roi-metros
-```
-
-Por ejemplo:
+Se puede invocar el módulo sin abrir la interfaz:
 
 ```bash
---roi-metros 20
+python3 reporte.py resultados_seac/reporte.json
 ```
 
-establece una región de interés de aproximadamente 20 metros alrededor de la posición GPS.
-
-Este valor es el **punto de partida**, no necesariamente el que se usa al final: ver la sección "Reintento automático según confianza y tamaño de ROI".
-
----
-
-# Máscara aproximada de asfalto
-
-Antes de detectar los bordes se genera una máscara que intenta conservar las superficies visualmente compatibles con la vía. Para esto se analizan características relacionadas con:
-
-* Saturación (`--saturacion-maxima`).
-* Cromaticidad (canales a/b de Lab).
-* Textura local (varianza de gris en una ventana pequeña, `--textura-maxima`).
-* Brillo, con **dos límites**:
-  * Un **techo adaptativo**: se calcula con el método de **Otsu** sobre los tonos de gris presentes en el ROI, en vez de usar un valor universal fijo. Esto evita que una foto sobre o sub-expuesta rompa el filtro.
-  * Un **piso contra sombras**: sin este piso, sombras muy oscuras de árboles o edificios (que también son acromáticas y de textura lisa) pasarían el resto de los filtros. El piso se adapta un poco a cada foto, pero nunca baja de un mínimo absoluto.
-
-También se utilizan operaciones morfológicas (cierre y apertura) para reducir pequeñas discontinuidades.
-
-**Importante:** esta máscara es deliberadamente amplia. No distingue calle de acera — ambas suelen pasar el filtro, porque ambas son superficies grises de baja saturación. Su función es descartar vegetación, agua, techos de color, vehículos, etc., **no** resolver la ambigüedad calle/acera. Esa ambigüedad se resuelve más adelante, con señales específicas.
-
----
-
-# Intensidad de referencia de la calle
-
-En vez de asumir que el punto GPS está sobre la calle (podría estar sobre la acera midiendo hacia el otro lado), el sistema calcula una intensidad de referencia de "asfalto real" a partir de los propios datos de la imagen:
-
-```text
-Píxeles dentro de la máscara de asfalto (ROI)
-                ↓
-     Separación en dos tonos (Otsu)
-                ↓
-   Racimo MÁS OSCURO → referencia de asfalto
-```
-
-La razón: el concreto de una acera casi siempre es más claro que el asfalto de la calzada. Si no hay una separación clara entre dos tonos (por ejemplo, un ROI sin acera visible), el sistema usa la mediana completa como respaldo.
-
-A partir de esa misma separación se calcula también una **tolerancia de gris**, que ya no es un número fijo: se ajusta según qué tan ruidoso es el propio asfalto de esa foto (su dispersión) y qué tan separado está del racimo claro. Si la separación es marcada, la tolerancia se endurece sola; si los tonos son parecidos, se relaja para no penalizar la calle real por variaciones normales de iluminación.
-
----
-
-# Detección de bordes
-
-Sobre la imagen procesada se utiliza:
-
-```text
-Canny Edge Detection
-```
-
-para detectar cambios significativos de intensidad que puedan corresponder a los límites de la vía.
-
-Los umbrales utilizados por Canny pueden indicarse manualmente mediante:
-
-```text
---canny-bajo
---canny-alto
-```
-
-Si no se proporcionan, el sistema determina automáticamente valores a partir de las características de intensidad de la imagen.
-
----
-
-# Estimación de la orientación de la calle
-
-Una vez detectados los bordes, se utiliza:
-
-```text
-HoughLinesP
-```
-
-para identificar segmentos de línea presentes en la imagen.
-
-Los segmentos cercanos a la posición GPS son analizados para determinar la orientación predominante de la vía.
-
-El proceso puede representarse como:
-
-```text
-Segmentos detectados
-        ↓
-Orientaciones
-        ↓
-Histograma angular
-        ↓
-Orientación dominante
-```
-
-Esta orientación representa aproximadamente la dirección longitudinal de la calle.
-
----
-
-# Selección de la pareja global de bordes
-
-Este es el núcleo del algoritmo. Con la orientación ya conocida, se proyectan todos los segmentos de Hough alineados con esa dirección sobre un sistema de coordenadas longitudinal/lateral (a lo largo y a lo ancho de la calle). Entre **todas las combinaciones posibles de dos segmentos**, se busca la pareja que mejor represente los dos bordes reales de la calle — no cualquier par de líneas paralelas, sino específicamente el que no sea, por ejemplo, un borde de calle emparejado con un borde de acera.
-
-## Señales evaluadas por cada pareja candidata
-
-| Señal | Qué mide | Por qué existe |
-| --- | --- | --- |
-| **Consistencia de ancho** | Qué tan estable es la distancia entre los dos segmentos a lo largo de todo su solapamiento | Un ancho que varía mucho sugiere que las líneas no son bordes paralelos reales de la misma vía |
-| **Transición visual** | Diferencia de pertenencia a la máscara de asfalto justo adentro vs. justo afuera de cada borde | Un borde real de calle debería mostrar máscara adentro y no-máscara afuera |
-| **Solapamiento relativo / continuidad** | Cuánto se superponen longitudinalmente los dos segmentos, y qué tan largos son | Bordes reales de calle corren paralelos por un tramo largo, no solo se cruzan en un punto |
-| **Similitud de gris** | Qué tan cerca está el tono promedio de la franja interior del par respecto a la intensidad de referencia de la calle | Distingue asfalto de acera cuando ambos ya pasaron el filtro de color |
-| **Consistencia de gris** | Dispersión del tono de gris a lo largo de la misma franja | Un promedio parecido a la calle puede esconder una franja que en realidad mezcla mitad calle, mitad acera; la dispersión alta delata esa mezcla |
-| **Respaldo de doble línea (cordón)** | Si cada borde elegido tiene una segunda línea paralela muy cercana hacia su lado exterior (0.08–0.55 m) | El cordón + caño real casi siempre genera dos líneas de Canny pegadas; una grieta o cambio de tono aislado normalmente no |
-| **Fuerza de borde interno** | Si existe alguna línea con buen soporte *entre* los dos bordes elegidos | Penaliza parejas que dejan "flotando" un borde más fuerte que el elegido, adentro del ancho escogido |
-| **Distancia al punto GPS / distancia longitudinal** | Qué tan lejos queda el par del punto medido en campo | Favorece la calle donde realmente se hizo la medición, sin descartar por completo parejas algo alejadas |
-
-Cada una de estas señales entra a una fórmula de puntaje ponderado; la pareja con mayor puntaje total, entre las que pasan un conjunto de filtros duros (ancho dentro de rango, solapamiento mínimo, cercanía razonable al GPS), es la que se usa para todo lo que sigue.
-
-## Motivo de fallo y candidatos alternativos
-
-Si ninguna combinación sobrevive los filtros duros, el sistema no inventa un resultado: registra **por qué** se rechazó cada combinación (`motivo_fallo_pareja`), por ejemplo:
-
-```text
-ancho_fuera_de_rango
-solapamiento_insuficiente
-lejos_del_gps
-lejos_longitudinalmente
-```
-
-Esto permite diagnosticar la causa real de un fallo (ej. una intersección con muchas líneas pintadas, o un punto GPS tomado desde la acera) en vez de solo saber que "no se pudo estimar".
-
-Cuando sí se encuentra una pareja, el sistema también guarda los **2 mejores candidatos que no ganaron** (`alternativas`), con el mismo desglose de señales — útil para revisar, ante un resultado dudoso, si el ganador le sacó ventaja clara al segundo lugar o si fue una decisión muy reñida.
-
----
-
-# Reintento automático según confianza y tamaño de ROI
-
-Un ROI grande (más contexto) puede sumar ruido de líneas ajenas a la calle (parqueos, cruces peatonales, plazas) y terminar promediando calle con acera. Un ROI chico reduce ese ruido, pero puede quedarse sin suficientes líneas para formar una pareja válida. No hay un tamaño único que funcione siempre.
-
-Por eso, el sistema:
-
-1. Corre primero con el `--roi-metros` indicado.
-2. Si no se encontró pareja, **o** si se encontró pero con confianza por debajo de `--confianza-minima-reintento` (por defecto 0.45), reintenta **una vez** con un ROI reducido (60 % del original, con un piso de 8 m). No se descarga nada nuevo: es el mismo mosaico ya en memoria.
-3. Entre los intentos que sí encontraron pareja, se conserva el de **mayor confianza** — no el que tenga más secciones válidas ni el ratio más alto de secciones válidas/candidatas, ya que un ROI muy chico puede lograr un ratio "perfecto" simplemente por no tener suficiente calle donde algo pueda salir mal. La métrica de confianza ya penaliza las muestras chicas (ver "Nivel de confianza").
-4. Si dos intentos exitosos arrojan anchos que difieren en más de 1 metro, el resultado se marca con `roi_ambiguo: true` en vez de decidir en silencio — es una señal de que el algoritmo mismo está en desacuerdo consigo mismo según la ventana usada, y ese caso amerita revisión manual.
-
-Todos los tamaños de ROI probados (con su ancho, confianza y cantidad de secciones) quedan documentados en `roi_candidatos` dentro del reporte.
-
----
-
-# Secciones transversales bloqueadas a la pareja
-
-Una vez fijada la pareja global de bordes, se buscan los bordes reales en 13 posiciones a lo largo de la calle, distribuidas entre aproximadamente:
-
-```text
--6 m y +6 m
-```
-
-con respecto al punto GPS, medidos a lo largo de la dirección de la calle.
-
-La diferencia clave respecto a una búsqueda de bordes independiente en cada corte es que aquí la búsqueda está **bloqueada**: en cada sección se busca el borde dentro de una ventana pequeña alrededor de la posición que predice la pareja global, en vez de aceptar cualquier línea fuerte cercana. Esto evita que una sección individual "salte" a una línea de acera, un auto estacionado o una junta de parqueo, incluso si esa línea es más marcada en Canny que el borde real en ese punto puntual.
-
-El uso de múltiples secciones permite disminuir la dependencia de una única medición que podría verse afectada por:
-
-* Vehículos.
-* Sombras.
-* Vegetación.
-* Imperfecciones de la imagen.
-* Bordes que no correspondan a la calle.
-
----
-
-# Medición del ancho de la calle
-
-En cada sección transversal se mide la distancia entre los dos bordes encontrados. La distancia detectada inicialmente se encuentra en píxeles y se convierte a metros mediante la resolución cartográfica calculada anteriormente:
-
-```text
-Distancia entre bordes en píxeles
-                ×
-         Metros por píxel
-                ↓
-          Ancho en metros
-```
-
-También se verifica que la medición se encuentre dentro del intervalo de ancho permitido. Por ejemplo:
+O indicar un nombre de archivo:
 
 ```bash
---ancho-minimo-m 3
---ancho-maximo-m 10
+python3 reporte.py resultados_seac/reporte.json --nombre informe_prueba.pdf
+```
+
+La invocación directa genera el PDF y muestra su ruta. **La actualización de `estado_pdf` y `reporte_pdf` en el JSON la realiza la interfaz**, no el comando independiente del módulo.
+
+### 12.3. Contenido del informe
+
+El documento implementado utiliza **3 páginas de tamaño A4**:
+
+| Página | Contenido |
+| --- | --- |
+| **1. Resultado principal** | Ancho estimado, fecha, coordenadas promedio, cantidad de mediciones GPS y confianza del algoritmo. |
+| **2. Evidencia satelital** | Imagen con marcador GPS, visualización de secciones transversales y métricas de análisis, incluida la resolución cartográfica. |
+| **3. Auditoría de la escena vial** | Fotografía de cámara, cuando existe, y notas sobre las fuentes de información y las limitaciones metodológicas. |
+
+Las imágenes se redimensionan y comprimen **solo para incrustarlas en el PDF**; los archivos originales de la carpeta de resultados no se alteran. Si falta la fotografía, el informe puede indicar que no existe evidencia disponible para esa ejecución.
+
+Por defecto, los nombres de PDF tienen una marca de tiempo:
+
+```text
+SEAC_reporte_AAAAMMDD_HHMMSS.pdf
 ```
 
 ---
 
-# Filtrado de mediciones
+## 13. Archivos de salida y reporte JSON
 
-No todas las mediciones transversales detectadas son utilizadas para obtener el resultado final.
-
-El sistema busca grupos de mediciones cuyos valores de ancho sean similares (usando la mediana y la desviación absoluta respecto a ella) y descarta aquellas que sean inconsistentes.
-
-Para generar una estimación final se requieren al menos:
-
-```text
-3 secciones transversales consistentes
-```
-
-Una vez seleccionadas las mediciones válidas, el ancho final se obtiene mediante:
-
-```text
-Mediana de los anchos válidos
-```
-
-El uso de la mediana permite reducir la influencia de valores atípicos.
-
----
-
-# Nivel de confianza
-
-Además del ancho estimado, el sistema calcula un valor de confianza asociado al resultado, compuesto por el producto de varios factores:
-
-```text
-Confianza
-    =  Consistencia entre las mediciones válidas
-    ×  Cobertura (cuántas secciones válidas hay, hasta un techo de 7)
-    ×  Confianza de la orientación detectada
-    ×  Calidad de la pareja global de bordes (su puntaje de selección)
-```
-
-Al ser un producto, un valor bajo en cualquiera de los cuatro factores baja la confianza total — por ejemplo, pocas secciones válidas (baja cobertura) penalizan el resultado aunque esas pocas secciones sean muy consistentes entre sí, evitando que una muestra chica parezca más confiable de lo que realmente es.
-
-Actualmente el resultado puede clasificarse como:
-
-```text
-Alta
-Media
-Baja
-Insuficiente
-```
-
----
-
-# Resultados generados
-
-Al ejecutar el pipeline se genera la carpeta:
+El pipeline guarda sus resultados en la carpeta definida mediante `--salida`, documentada por defecto como `resultados_seac/`.
 
 ```text
 resultados_seac/
+├── 01_imagen_satelital.png
+├── 02_imagen_con_gps.png
+├── 03_contraste_grises.png
+├── 04_mascara_asfalto.png
+├── 05_bordes_canny.png
+├── 06_secciones_transversales.png
+├── camara_referencia_...jpg        # Si la cámara generó una foto
+├── reporte.json
+└── SEAC_reporte_...pdf             # Solo si se solicita el informe
 ```
 
-que contiene diferentes etapas del procesamiento:
+### 13.1. Evidencias de procesamiento
 
-```text
-01_imagen_satelital.png
-02_imagen_con_gps.png
-03_contraste_grises.png
-04_mascara_asfalto.png
-05_bordes_canny.png
-06_secciones_transversales.png
-reporte.json
-```
-
-### `01_imagen_satelital.png`
-
-Mosaico original obtenido desde Esri.
-
-### `02_imagen_con_gps.png`
-
-Mosaico con la posición GPS promedio marcada.
-
-### `03_contraste_grises.png`
-
-Imagen en escala de grises (con CLAHE) utilizada durante el procesamiento, incluyendo el cálculo de intensidad de referencia de la calle.
-
-### `04_mascara_asfalto.png`
-
-Máscara aproximada de las regiones compatibles con la superficie de la vía (calle **y** acera; ver "Máscara aproximada de asfalto").
-
-### `05_bordes_canny.png`
-
-Bordes detectados mediante Canny, insumo para `HoughLinesP`.
-
-### `06_secciones_transversales.png`
-
-Resultado visual en el que se muestran los segmentos detectados (naranja), la orientación estimada (flecha magenta), la pareja global de bordes elegida (rojo/verde) y las 13 secciones bloqueadas (amarillo las válidas, gris las descartadas).
-
-### `reporte.json`
-
-Además de las mediciones GPS y la resolución cartográfica, incluye el diagnóstico completo de la detección:
-
-| Campo | Contenido |
+| Archivo | Descripción |
 | --- | --- |
-| `intensidad_calle_referencia` / `tolerancia_gris_usada` | Ver "Intensidad de referencia de la calle" |
-| `pareja_global` | Todas las señales de la pareja ganadora (transición, similitud/consistencia de gris, respaldo de cordón, etc.) y sus `alternativas` (los 2 candidatos que no ganaron) |
-| `motivo_fallo_pareja` | Desglose de por qué se rechazó cada combinación, cuando no se encontró pareja |
-| `roi_metros_usado` / `roi_candidatos` / `roi_ambiguo` | Qué tamaño de ROI se usó al final, qué tamaños se probaron y si hubo desacuerdo entre ellos (ver "Reintento automático") |
-| `cantidad_secciones_candidatas` / `cantidad_secciones_validas` | Ver "Filtrado de mediciones" |
-| `confianza` / `nivel_confianza` | Ver "Nivel de confianza" |
+| `01_imagen_satelital.png` | Mosaico original descargado de Esri. |
+| `02_imagen_con_gps.png` | Mosaico con la ubicación GPS promedio señalada. |
+| `03_contraste_grises.png` | Imagen de grises y contraste utilizada por el algoritmo. |
+| `04_mascara_asfalto.png` | Regiones visualmente compatibles con la superficie vial. |
+| `05_bordes_canny.png` | Contornos identificados mediante Canny. |
+| `06_secciones_transversales.png` | Evidencia de orientación, bordes elegidos y cortes transversales utilizados o descartados. |
+| `camara_referencia_...jpg` | Fotografía con información de auditoría, si está disponible. |
+| `reporte.json` | Resultados numéricos y diagnósticos del procesamiento. |
+| `SEAC_reporte_...pdf` | Informe visual opcional, generado a petición del usuario. |
+
+En la visualización de secciones transversales se pueden identificar los segmentos detectados, la dirección estimada de la calle, la pareja global seleccionada y los cortes aceptados o rechazados.
+
+### 13.2. Organización de `reporte.json`
+
+Los campos utilizados por la interfaz y el generador de PDF incluyen:
+
+| Campo | Significado |
+| --- | --- |
+| `analisis_gps` | Coordenadas promedio, cantidad de mediciones y estadísticas GPS. |
+| `resolucion_cartografica_m_por_pixel` | Escala utilizada para convertir medidas en píxeles a metros. |
+| `deteccion.ancho_preliminar_m` | Estimación del ancho expresada en metros, si se obtuvo. |
+| `deteccion.confianza` | Indicador numérico de confianza. |
+| `deteccion.nivel_confianza` | Clasificación cualitativa del resultado. |
+| `deteccion.angulo_calle_grados` | Orientación estimada de la vía. |
+| `deteccion.cantidad_secciones_candidatas` | Cantidad de secciones evaluadas. |
+| `deteccion.cantidad_secciones_validas` | Cantidad de secciones aceptadas. |
+| `deteccion.pareja_global` | Datos de la pareja de bordes seleccionada y posibles alternativas, cuando se registran. |
+| `deteccion.motivo_fallo_pareja` | Diagnóstico de rechazo cuando no se logra elegir una pareja válida. |
+| `deteccion.roi_metros_usado` / `roi_candidatos` / `roi_ambiguo` | Información de los intentos y la posible ambigüedad del ROI. |
+| `camara` | Disponibilidad y ruta de la foto de auditoría, o el motivo de ausencia. |
+| `estado_pdf` / `reporte_pdf` | Estado y ruta del PDF, añadidos cuando la interfaz lo genera. |
+
+Ejemplo **parcial e ilustrativo** de su estructura (los valores y las claves adicionales dependen de la ejecución):
+
+```json
+{
+  "analisis_gps": {
+    "cantidad_mediciones": 10,
+    "latitud_promedio": 9.864,
+    "longitud_promedio": -83.915
+  },
+  "resolucion_cartografica_m_por_pixel": 0.30,
+  "deteccion": {
+    "ancho_preliminar_m": 6.50,
+    "confianza": 0.82,
+    "nivel_confianza": "Alta",
+    "angulo_calle_grados": 15.2,
+    "cantidad_secciones_candidatas": 13,
+    "cantidad_secciones_validas": 10
+  },
+  "camara": {
+    "disponible": false,
+    "motivo": "captura_deshabilitada"
+  }
+}
+```
+
+> **Importante:** este JSON es un ejemplo de la forma de los datos, **no un resultado medido ni un archivo literal completo**. Para obtener el esquema real y los diagnósticos detallados, consulte el `reporte.json` de una ejecución.
 
 ---
 
-# Arquitectura modular
+## 14. Parámetros del pipeline
 
-El software se encuentra dividido en módulos independientes con responsabilidades específicas.
+Los siguientes parámetros se encuentran documentados para `seac_pipeline.py` y se pueden utilizar también al iniciar `interfaz_seac.py`, ya que ambos comparten el analizador de argumentos. Los valores indicados reflejan la configuración documentada en el README previo; la fuente definitiva para la versión instalada es `python3 seac_pipeline.py --help`.
 
-```text
-mediciones_gps.txt
-        │
-        ▼
-┌──────────────────┐
-│      gps.py      │
-│ Procesamiento GPS│
-└────────┬─────────┘
-         │
-         │ Coordenada promedio
-         ▼
-┌──────────────────┐
-│     esri.py      │
-│ Imagen satelital │
-└────────┬─────────┘
-         │
-         │ Mosaico + resolución
-         ▼
-┌────────────────────────┐
-│ estimacion_ancho.py    │
-│ Procesamiento de imagen│
-│ y estimación del ancho │
-└───────────┬────────────┘
-            │
-            ▼
-       Ancho estimado
-```
-
-El archivo:
-
-```text
-seac_pipeline.py
-```
-
-actúa como coordinador del flujo general y utiliza las interfaces proporcionadas por cada módulo.
-
-La estructura actual del software es:
-
-```text
-SEAC/
-│
-├── seac_pipeline.py
-├── gps.py
-├── esri.py
-├── estimacion_ancho.py
-├── mediciones_gps.txt
-└── resultados_seac/
-```
-
-La separación en módulos permite modificar o sustituir un componente sin alterar la lógica interna de los demás, siempre que se mantenga la interfaz definida entre ellos.
-
-Por ejemplo, el proveedor de imágenes satelitales podría ser sustituido por otro servicio manteniendo una interfaz equivalente para obtener el mosaico y su información asociada.
-
----
-
-# Ejecución
-
-El pipeline completo puede ejecutarse mediante:
-
-```bash
-py seac_pipeline.py mediciones_gps.txt
-```
-
-También es posible modificar diferentes parámetros del procesamiento. Por ejemplo:
-
-```bash
-py seac_pipeline.py mediciones_gps.txt --roi-metros 20 --ancho-maximo-m 10 --mostrar
-```
-
-## Parámetros disponibles
-
-| Parámetro | Por defecto | Descripción |
+| Parámetro | Valor documentado | Descripción |
 | --- | --- | --- |
-| `archivo` | `mediciones_gps.txt` | Archivo de texto con las mediciones GPS |
-| `--zoom` | `19` | Nivel de zoom de las teselas de Esri |
-| `--radio-teselas` | `1` | Radio de teselas alrededor de la tesela central (1 → mosaico 3×3) |
-| `--salida` | `resultados_seac` | Carpeta donde se guardan las imágenes y el reporte |
-| `--roi-metros` | `20.0` | Radio del ROI inicial alrededor del punto GPS |
-| `--canny-bajo` / `--canny-alto` | Automático | Umbrales de Canny; si se omiten, se calculan a partir del contraste de la imagen |
-| `--longitud-minima-m` | `4.0` | Longitud mínima (en metros) para que un segmento de Hough se considere |
-| `--ancho-minimo-m` / `--ancho-maximo-m` | `3.0` / `12.0` | Rango de ancho de calle considerado válido |
-| `--tolerancia-angulo` | `12.0` | Tolerancia angular (grados) para alinear segmentos con la orientación dominante |
-| `--saturacion-maxima` | `90` | Saturación máxima admitida en la máscara de asfalto |
-| `--textura-maxima` | `1000.0` | Varianza local máxima admitida en la máscara de asfalto |
-| `--confianza-minima-reintento` | `0.45` | Umbral de confianza por debajo del cual se reintenta con un ROI reducido |
-| `--mostrar` | `False` | Muestra visualmente el resultado final al terminar |
+| `archivo` | `mediciones_gps.txt` | Archivo de entrada con las mediciones GPS. |
+| `--zoom` | `19` | Nivel de zoom del mapa satelital. |
+| `--radio-teselas` | `1` | Radio de teselas; `1` construye un mosaico de 3 × 3. |
+| `--salida` | `resultados_seac` | Directorio donde se guardan las salidas. |
+| `--roi-metros` | `20.0` | Radio inicial de análisis alrededor de la posición GPS. |
+| `--canny-bajo` / `--canny-alto` | Automático | Umbrales para la detección de bordes. |
+| `--longitud-minima-m` | `4.0` | Longitud mínima de los segmentos considerados. |
+| `--ancho-minimo-m` / `--ancho-maximo-m` | `3.0` / `12.0` | Límites de ancho admitidos por el algoritmo. |
+| `--tolerancia-angulo` | `12.0` | Tolerancia angular, en grados. |
+| `--saturacion-maxima` | `90` | Límite de saturación en la máscara candidata. |
+| `--textura-maxima` | `1000.0` | Límite de variación local de grises. |
+| `--confianza-minima-reintento` | `0.45` | Confianza mínima antes de intentar un ROI más pequeño. |
+| `--mostrar` | Desactivado | Solicita una visualización al terminar el pipeline desde consola. La interfaz lo desactiva internamente. |
 
-En el ejemplo anterior:
+Por ejemplo, para limitar la detección a calles de **3 a 10 m** dentro de un ROI inicial de **20 m**:
 
-```text
---roi-metros 20
+```bash
+python3 seac_pipeline.py mediciones_gps.txt \
+  --roi-metros 20 \
+  --ancho-minimo-m 3 \
+  --ancho-maximo-m 10
 ```
 
-establece una región de interés de 20 metros alrededor de la posición GPS (punto de partida; ver "Reintento automático según confianza y tamaño de ROI").
-
-```text
---ancho-maximo-m 10
-```
-
-establece en 10 metros el ancho máximo considerado durante la búsqueda de los límites de la vía.
-
-```text
---mostrar
-```
-
-permite mostrar visualmente el resultado final del procesamiento.
+**Diferencia entre objetivo de diseño y configuración:** el alcance del proyecto contempla evaluar vías en un rango mayor (aproximadamente **2.5–20 m**), mientras que los límites documentados por defecto del algoritmo son **3–12 m**. Esos límites pueden ajustarse, pero hacerlo **no garantiza** que todos los casos del rango ampliado se estimen correctamente.
 
 ---
 
-# Tecnologías utilizadas
+## 15. Limitaciones y criterios de evaluación
 
-## Hardware
+### 15.1. Alcance de la estimación
 
-* Módulo GPS NEO-6M.
-* Raspberry Pi 4.
-* Cámara compatible CSI o USB para futuras etapas.
+- El resultado es una **estimación obtenida a partir de imágenes satelitales**, no una medición topográfica certificada.
+- Una fotografía de cámara **documenta la escena**, pero no interviene actualmente en el valor geométrico final.
+- La localización GPS presenta incertidumbre, especialmente cerca de obstáculos o en condiciones de baja calidad de señal.
+- La imagen satelital podría estar desactualizada, contener sombras, vegetación, vehículos, superficies similares o una geometría irregular.
+- La resolución cartográfica no equivale necesariamente a la resolución real de la fotografía.
+- El sistema procesa **una ubicación por ejecución** y requiere conexión a un servicio de imágenes externo para obtener nuevos mosaicos.
 
-## Software
+### 15.2. Escenarios que pueden reducir la precisión
 
-### Python
+- **GPS desplazado respecto a la calzada:** el receptor está sobre una acera, plaza o zona próxima, pero no sobre el eje de la vía.
+- **Entorno con mucho ruido geométrico:** estacionamientos, intersecciones y marcas viales generan segmentos competidores.
+- **Asfalto y acera de apariencia muy parecida:** los filtros de color y textura no los separan de forma concluyente.
+- **Sombras y elementos que ocultan los bordes:** reducen la continuidad de las líneas verdaderas.
+- **Diferencia entre intentos de ROI:** dos ventanas de análisis pueden producir anchos plausibles distintos.
 
-* Python 3.
-* NumPy.
-* OpenCV.
-* Pillow.
-* `urllib`.
-* `math`.
-* `argparse`.
-* `json`.
+Los campos de diagnóstico —en particular `motivo_fallo_pareja`, `roi_candidatos` y `roi_ambiguo`— ayudan a revisar estos casos.
 
-### Procesamiento de imágenes
+### 15.3. Metas de validación del proyecto
 
-* Conversión de espacios de color (BGR, HSV, Lab).
-* Filtrado bilateral.
-* CLAHE.
-* Umbral de Otsu (adaptativo, no solo binario global).
-* Operaciones morfológicas.
-* Canny Edge Detection.
-* HoughLinesP.
+La documentación de diseño plantea, como **objetivos de evaluación** y no como resultados ya certificados:
 
-### Datos geoespaciales
+| Indicador | Meta documentada |
+| --- | --- |
+| Rango de vías a evaluar | Aproximadamente **2.5 a 20 m**. |
+| Error relativo frente a una referencia | **≤ 15 %**. |
+| Tiempo de estimación | **≤ 20 s** como objetivo de desempeño. |
 
-* Coordenadas GPS.
-* Latitud.
-* Longitud.
-* HDOP.
-* Número de satélites.
-* Web Mercator.
-* Teselas (*tiles*).
-* Resolución cartográfica en metros por píxel.
-* Imágenes satelitales.
-* Esri World Imagery.
-* ArcGIS REST API.
+Para determinar si se cumplen, se requieren pruebas controladas y comparación con mediciones físicas de referencia. No se declara aquí una tasa global de acierto comprobada ni se confunde la **confianza interna** del algoritmo con el **error real** de medición. El tiempo de adquirir nuevas coordenadas GPS también depende de la señal y no debe confundirse con el tiempo del procesamiento satelital.
+
+### 15.4. Mejoras futuras consideradas
+
+Entre las líneas de mejora posibles se incluyen una separación más robusta de sombras y superficies, análisis adicional de textura, evaluación de más casos de campo y, eventualmente, segmentación semántica. Estas opciones son **posibilidades de evolución**, no funcionalidades que este README declare implementadas.
 
 ---
 
-# Consideraciones actuales
+## 16. Solución de problemas frecuentes
 
-La resolución calculada por el sistema corresponde a la escala cartográfica de Web Mercator para la latitud y el nivel de zoom utilizados.
-
-Esta resolución no garantiza por sí sola la resolución espacial nativa ni la precisión posicional de la fotografía satelital.
-
-Por esta razón, las estimaciones de ancho obtenidas deberán ser evaluadas posteriormente mediante su comparación con mediciones reales o valores de referencia.
-
-## Limitaciones conocidas
-
-En pruebas de campo, el sistema estima correctamente en aproximadamente el **90 % de las ubicaciones**. Los casos restantes se han rastreado, con evidencia del propio `reporte.json` (no solo sospecha), a causas identificables y no a fallas arbitrarias del algoritmo:
-
-* **Punto GPS alejado del centro real de la calle** — si quien midió estaba parado en la acera, un camellón o el borde de una plaza en vez de en plena vía, ninguna pareja de bordes cae dentro de la distancia máxima admitida al GPS, sin importar el tamaño del ROI usado.
-* **ROI con mucho ruido geométrico** — cruces, parqueos o zonas con muchas líneas pintadas (cruces peatonales, cajones) generan muchas combinaciones de segmentos con anchos y solapamientos que no corresponden a la calle real.
-* **Calle y acera con tono de gris casi idéntico** — en algunas fotos, la máscara de asfalto no logra diferenciar entre ambas superficies (ver "Máscara aproximada de asfalto"); el desempate depende entonces de señales estructurales (respaldo de doble línea) o de gris relativo, que no siempre son suficientes por sí solas.
-
-Estas causas quedan documentadas automáticamente en `motivo_fallo_pareja` y `roi_ambiguo` dentro del reporte, para que revisar un caso fallido no dependa de inspeccionar las imágenes a ojo desde cero.
-
-Posibles extensiones evaluadas para reducir aún más este porcentaje, pendientes de justificarse con más casos de falla:
-
-* Separar tonos con **k-means (k=3)** en vez de Otsu (k=2), para no confundir sombra dura con asfalto.
-* Análisis de textura con **filtros de Gabor o GLCM**, para distinguir el patrón regular de baldosas/juntas de una acera del patrón continuo del asfalto.
-* Un **canal invariante a sombra** antes de la escala de grises, para reducir bordes falsos generados por sombras duras de árboles o edificios.
-* Segmentación semántica con un modelo entrenado, como techo de precisión a largo plazo — descartada por ahora porque implica un proyecto de otra naturaleza (dataset, entrenamiento, mantenimiento) en vez de una mejora incremental sobre las heurísticas actuales.
+| Problema | Revisión sugerida |
+| --- | --- |
+| **No aparece la interfaz Tkinter.** | Verificar la instalación de `python3-tk`, la variable de entorno `DISPLAY` y la disponibilidad de una sesión gráfica o X11. |
+| **No se encuentra `acerca_de.py` o `seac_pipeline.py`.** | Confirmar que los módulos importados estén presentes en el directorio del proyecto y con el nombre esperado. |
+| **No se encuentra `GPS.py` al actualizar coordenadas.** | Colocar `GPS.py` junto a `interfaz_seac.py`. |
+| **No aparecen 10 mediciones GPS.** | Revisar alimentación, conexión serial, permisos del puerto, recepción satelital y criterios de validación del módulo. |
+| **El archivo GPS existe, pero las coordenadas son antiguas.** | Elegir **Actualizar coordenadas** y confirmar que `GPS.py` haya renovado el archivo. Elegir **Usar últimas coordenadas** no ejecuta el GPS. |
+| **Falla la descarga satelital.** | Comprobar conectividad, disponibilidad del servicio, parámetros de zoom y posibles restricciones de acceso. |
+| **La cámara no abre o genera una imagen negra.** | Verificar índice, permisos de `/dev/video*`, conexión, iluminación y compatibilidad con el formato solicitado. |
+| **No se logra ajustar la exposición.** | Comprobar `v4l2-ctl` y los controles admitidos por la cámara; probar `--sin-autoexposicion` para una captura independiente. |
+| **No se puede visualizar el análisis de secciones.** | Confirmar que exista `06_secciones_transversales.png` en la carpeta de salida. |
+| **No se habilita “Generar informe”.** | Primero se debe completar una estimación y generar `reporte.json`. |
+| **El informe no se abre automáticamente.** | El archivo puede haberse generado correctamente aunque el visor externo falle. Abrir manualmente el PDF desde `resultados_seac/`. |
+| **No existe una fotografía de auditoría en el PDF.** | Revisar el bloque `camara` de `reporte.json` y confirmar que haya una captura disponible. |
+| **El ancho tiene confianza baja o no se estima.** | Revisar máscara, bordes, ROI, pareja global, secciones y motivos de fallo antes de modificar parámetros. |
 
 ---
 
-# Documentación de Esri
+## 17. Referencias y atribuciones
 
-Consultar el [tutorial de múltiples capas](https://developers.arcgis.com/openlayers/maps/raster-tile-basemaps/display-multiple-basemap-layers/) para acceder a documentación relacionada con los mapas base de Esri.
+- **Esri World Imagery:** servicio de imágenes satelitales utilizado como fuente geográfica principal. Las fotografías pueden provenir de Esri y otros proveedores de datos. **Antes de distribuir imágenes o informes derivados, deben revisarse los términos de uso y los créditos aplicables**. Véase la [documentación de ArcGIS sobre mapas base ráster](https://developers.arcgis.com/openlayers/maps/raster-tile-basemaps/display-multiple-basemap-layers/).
+- **OpenCV:** biblioteca empleada para operaciones de visión por computadora y captura de cámara.
+- **Python / NumPy / Pillow / Tkinter / ReportLab:** herramientas utilizadas para implementar la aplicación, la interfaz y los reportes.
+- **Documentación del proyecto SEAC:** ficha de proyecto, especificación de requerimientos y documento de diseño del curso CE-1114 del Instituto Tecnológico de Costa Rica.
+
 ---
+
+**SEAC · Sistema de Estimación de Ancho de Calles**  
+*Proyecto académico de Ingeniería en Computadores — Instituto Tecnológico de Costa Rica, 2026.*
