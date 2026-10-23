@@ -1,5 +1,5 @@
 
-# Sistema de estimación de parámetros geométricos de una vía
+# SEAC: Sistema de Estimacion de Ancho de Calles
 
 ## Descripción
 
