@@ -10,7 +10,7 @@ CE-1114 — Proyecto de Aplicación de la Ingeniería en Computadores · II seme
 
 <p><strong>Desarrollador:</strong> Javier Francisco Tenorio Cervantes<br>
 <strong>Contraparte institucional:</strong> Instituto Tecnológico de Costa Rica (TEC)<br>
-<strong>Persona supervisora de la contraparte:</strong> Luis Alberto Chavarria Zamora<br>
+<strong>Persona supervisora:</strong> Luis Alberto Chavarria Zamora<br>
 <strong>Año:</strong> 2026 · <strong>Plataforma:</strong> Raspberry Pi 4 / Linux</p>
 
 <p>
@@ -30,7 +30,7 @@ CE-1114 — Proyecto de Aplicación de la Ingeniería en Computadores · II seme
 
 <p><strong>Prototipo funcional sujeto a validación de campo</strong></p>
 
-<p><a href="Manuales/manual_usuario.docx">Manual de usuario</a> · <a href="Manuales/manual_inst.docx">Manual de instalación</a> · <a href="#inicio-rapido">Inicio rápido</a></p>
+<p><a href="Manuales/manual_usuario_2026.pdf">Manual de usuario</a> · <a href="Manuales/manual_inst_2026.pdf">Manual de instalación</a> · <a href="#inicio-rapido">Inicio rápido</a></p>
 
 </div>
 
@@ -53,8 +53,8 @@ El proyecto busca facilitar la obtención de un parámetro geométrico de la car
 
 | Documento | Dirigido a | Contenido principal |
 |:--|:--|:--|
-| **[Manual de usuario](Manuales/manual_usuario.docx)** | Personas que operan SEAC | Apertura con `seacapp`, opciones de GPS, lectura de los cuatro paneles, interpretación del ancho y la confianza, fotografía de auditoría, generación de PDF y problemas habituales. |
-| **[Manual de instalación y configuración](Manuales/manual_inst.docx)** | Personas encargadas de instalar o mantener SEAC | Raspberry Pi OS, alimentación, UART, cámara, dependencias Python, estructura modular, instalación del lanzador `seacapp`, SSH/X11, SSHFS, limitaciones de CPU y diagnóstico. |
+| **[Manual de usuario](Manuales/manual_usuario_2026.pdf)** | Personas que operan SEAC | Apertura con `seacapp`, opciones de GPS, lectura de los cuatro paneles, interpretación del ancho y la confianza, fotografía de auditoría, generación de PDF y problemas habituales. |
+| **[Manual de instalación y configuración](Manuales/manual_inst_2026.pdf)** | Personas encargadas de instalar o mantener SEAC | Raspberry Pi OS, alimentación, UART, cámara, dependencias Python, estructura modular, instalación del lanzador `seacapp`, SSH/X11, SSHFS, limitaciones de CPU y diagnóstico. |
 
 Los documentos están en formato **Microsoft Word (`.docx`)** y pueden consultarse con Word o LibreOffice. Si sus nombres cambian al incorporarlos al repositorio, deben actualizarse también los enlaces de esta sección.
 
@@ -111,7 +111,7 @@ Después de abrir la interfaz:
 
 > **Importante:** `seacapp` es el lanzador de la aplicación modular. Debe estar instalado en la Raspberry Pi y su sesión gráfica remota debe disponer de `DISPLAY`. La dirección IP puede cambiar según la red o la configuración DHCP.
 
-Para instalar el sistema desde cero, continuar en [Instalación y preparación](#instalacion) o seguir el [Manual de instalación](Manuales/manual_inst.docx).
+Para instalar el sistema desde cero, continuar en [Instalación y preparación](#instalacion) o seguir el [Manual de instalación](Manuales/manual_inst_2026.pdf).
 
 ---
 
@@ -221,8 +221,8 @@ La aplicación se ejecuta desde la **raíz del proyecto**, donde permanece `seac
 SEAC_Project/
 ├── README.md
 ├── Manuales/
-│   ├── manual_usuario.docx           # Guía de operación
-│   └── manual_inst.docx              # Instalación y configuración
+│   ├── manual_usuario_2026.pdf           # Guía de operación
+│   └── manual_inst_2026.pdf              # Instalación y configuración
 ├── camara/
 │   ├── __init__.py
 │   └── camara.py                     # Captura y auditoría visual
@@ -264,7 +264,7 @@ SEAC_Project/
 <a id="instalacion"></a>
 ## 6. Instalación y preparación
 
-Las siguientes instrucciones resumen el despliegue utilizado en la Raspberry Pi. Para cableado, paquetes, seguridad, SSH/X11 y validación detallada, consultar el **[Manual de instalación](Manuales/manual_inst.docx)**.
+Las siguientes instrucciones resumen el despliegue utilizado en la Raspberry Pi. Para cableado, paquetes, seguridad, SSH/X11 y validación detallada, consultar el **[Manual de instalación](Manuales/manual_inst_2026.pdf)**.
 
 ### 6.1. Preparar Raspberry Pi OS
 
@@ -662,7 +662,7 @@ El informe **no se genera automáticamente** al terminar el cálculo. Para crear
 
 El formato documentado es de **tres páginas A4**: resultado y métricas GPS; evidencia satelital y análisis transversal; y fotografía de auditoría (si está disponible), con observaciones y atribuciones. El PDF se construye a partir de las evidencias existentes: **no vuelve a leer el GPS ni a ejecutar el algoritmo**.
 
-Para instrucciones paso a paso sobre la interfaz y la consulta del informe, revisar el **[Manual de usuario](Manuales/manual_usuario.docx)**.
+Para instrucciones paso a paso sobre la interfaz y la consulta del informe, revisar el **[Manual de usuario](Manuales/manual_usuario_2026.pdf)**.
 
 ---
 
@@ -850,7 +850,7 @@ sudo poweroff
 | SSH deja de funcionar tras un reinicio | Verificar la IP con `hostname -I` cuando haya acceso local y confirmar que SSH esté activo. |
 | La Raspberry Pi se apaga al procesar | Revisar alimentación, cable y `vcgencmd get_throttled`; no depender exclusivamente de límites de CPU. |
 
-Para guías más detalladas, consultar el **[Manual de instalación](Manuales/manual_inst.docx)** y el **[Manual de usuario](Manuales/manual_usuario.docx)**.
+Para guías más detalladas, consultar el **[Manual de instalación](Manuales/manual_inst_2026.pdf)** y el **[Manual de usuario](Manuales/manual_usuario_2026.pdf)**.
 
 ---
 
@@ -864,6 +864,7 @@ Para guías más detalladas, consultar el **[Manual de instalación](Manuales/ma
 - **Superficies similares:** aceras, estacionamientos y ciertas texturas pueden confundirse con límites viales.
 - **Entornos complejos:** intersecciones, curvas, vías irregulares y líneas parciales pueden generar ambigüedad.
 - **Servicio externo:** la descarga de nuevos mosaicos necesita acceso al proveedor satelital.
+- **Conexión a Internet:** la ejecución del SEAC requiere una conexión a internet estable para obtener la imagen satelital.
 - **Auditoría visual:** la cámara documenta la escena, pero no modifica el cálculo numérico actual.
 - **Alcance funcional:** el sistema no calcula velocidades vehiculares ni sustituye equipos profesionales de medición topográfica.
 
@@ -877,7 +878,7 @@ El tiempo necesario para conseguir señal GPS puede exceder el tiempo del proces
 
 Entre las líneas de trabajo futuras se encuentran ampliar la validación sobre carreteras de diferentes materiales, mejorar la separación entre acera y calzada, estudiar más escenarios con sombras e intersecciones, contrastar estimaciones con medidas físicas y evaluar técnicas adicionales de segmentación visual.
 
-Se presentan como **posibilidades de investigación y mejora**, no como funcionalidades ya implementadas.
+Se presentan como posibilidades de investigación y mejora, no como funcionalidades ya implementadas.
 
 ---
 
@@ -919,6 +920,6 @@ Se presentan como **posibilidades de investigación y mejora**, no como funciona
 **SEAC · Sistema de Estimación de Ancho de Calles**  
 *Proyecto académico de Ingeniería en Computadores · Instituto Tecnológico de Costa Rica · 2026*
 
-**[Volver al inicio](#seac) · [Manual de usuario](Manuales/manual_usuario.docx) · [Manual de instalación](Manuales/manual_inst.docx)**
+**[Volver al inicio](#seac) · [Manual de usuario](Manuales/manual_usuario_2026.pdf) · [Manual de instalación](Manuales/manual_inst_2026.pdf)**
 
 </div>
