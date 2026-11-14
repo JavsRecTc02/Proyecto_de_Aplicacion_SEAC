@@ -1,0 +1,161 @@
+{
+  "fuente": "Esri World Imagery",
+  "archivo_mediciones": "/home/javier/Documentos/SEAC_Project/mediciones_gps.txt",
+  "zoom": 19,
+  "radio_teselas": 1,
+  "posicion_gps_en_imagen_px": {
+    "x": 265.18523448705673,
+    "y": 421.036470271647
+  },
+  "resolucion_cartografica_m_por_pixel": 0.2941740624903135,
+  "cobertura_aproximada_m": {
+    "ancho": 225.9256799925608,
+    "alto": 225.9256799925608
+  },
+  "analisis_gps": {
+    "cantidad_mediciones": 10,
+    "latitud_promedio": 9.857485999999998,
+    "longitud_promedio": -83.910803,
+    "latitud_minima": 9.857486,
+    "latitud_maxima": 9.857486,
+    "longitud_minima": -83.910803,
+    "longitud_maxima": -83.910803,
+    "desviacion_latitud_grados": 1.8724445165742407e-15,
+    "desviacion_longitud_grados": 0.0,
+    "rango_latitud_m": 0.0,
+    "rango_longitud_m": 0.0,
+    "distancias_al_promedio_m": [
+      1.9752186845167106e-10,
+      1.9752186845167106e-10,
+      1.9752186845167106e-10,
+      1.9752186845167106e-10,
+      1.9752186845167106e-10,
+      1.9752186845167106e-10,
+      1.9752186845167106e-10,
+      1.9752186845167106e-10,
+      1.9752186845167106e-10,
+      1.9752186845167106e-10
+    ],
+    "distancia_promedio_m": 1.9752186845167106e-10,
+    "distancia_maxima_m": 1.9752186845167106e-10
+  },
+  "camara": {
+    "disponible": false,
+    "motivo": "no_se_pudo_capturar_imagen",
+    "latitud": 9.857485999999998,
+    "longitud": -83.910803
+  },
+  "deteccion": {
+    "cantidad_segmentos_hough": 8,
+    "canny_bajo_usado": 84,
+    "canny_alto_usado": 167,
+    "radio_roi_px": 41,
+    "roi_metros_usado": 12.0,
+    "roi_candidatos": [
+      {
+        "roi_metros": 20.0,
+        "ancho_estimado_m": 7.648525624748152,
+        "confianza": 0.34759566626757876,
+        "secciones_validas": 13,
+        "secciones_candidatas": 13
+      },
+      {
+        "roi_metros": 12.0,
+        "ancho_estimado_m": 7.5014385935029955,
+        "confianza": 0.46368900639133637,
+        "secciones_validas": 13,
+        "secciones_candidatas": 13
+      }
+    ],
+    "roi_ambiguo": false,
+    "centro_ancla_px": [
+      270.8613696481143,
+      407.49485249657266
+    ],
+    "distancia_recentrado_m": 4.319392152838108,
+    "angulo_calle_grados": 22.741592142256177,
+    "confianza_orientacion": 0.8051079504507691,
+    "intensidad_calle_referencia": 77.0,
+    "tolerancia_gris_usada": 13.343399999999999,
+    "pareja_global": {
+      "ancho_hough_m": 7.450438437114965,
+      "mad_ancho_m": 0.005012067566172007,
+      "consistencia_ancho": 0.9966363942145982,
+      "solapamiento_m": 10.54512913035219,
+      "solapamiento_relativo": 0.9999906984305031,
+      "continuidad": 1.0,
+      "transicion_izquierda": 0.16666666666666669,
+      "transicion_derecha": 0.16666666666666669,
+      "transicion_visual": 0.16666666666666669,
+      "similitud_gris": 0.0,
+      "consistencia_gris": 0.784620658796316,
+      "respaldo_cordon": 0.5,
+      "fuerza_borde_interno": 0.0,
+      "distancia_gps_calle_m": 0.5958743662807453,
+      "puntaje": 0.5927064418459773,
+      "alternativas": [
+        {
+          "ancho_mediano_m": 7.686005612725057,
+          "consistencia_ancho": 0.9315291816106948,
+          "transicion_visual": 0.16666666666666669,
+          "similitud_gris": 0.0,
+          "consistencia_gris": 0.8064969275093595,
+          "respaldo_cordon": 0.5,
+          "fuerza_borde_interno": 0.35,
+          "distancia_gps_calle_m": 0.37216111354279735,
+          "puntaje": 0.5472852100437154
+        },
+        {
+          "ancho_mediano_m": 8.12706755854821,
+          "consistencia_ancho": 0.9948607256655366,
+          "transicion_visual": 0.16666666666666669,
+          "similitud_gris": 0.0,
+          "consistencia_gris": 0.4544672321011236,
+          "respaldo_cordon": 0.0,
+          "fuerza_borde_interno": 0.35,
+          "distancia_gps_calle_m": 0.0,
+          "puntaje": 0.49443426010701835
+        }
+      ]
+    },
+    "motivo_fallo_pareja": null,
+    "cantidad_secciones_candidatas": 13,
+    "cantidad_secciones_validas": 13,
+    "anchos_candidatos_m": [
+      7.648525624748152,
+      7.795612655993309,
+      7.648525624748152,
+      7.942699687238465,
+      7.207264531012681,
+      7.354351562257837,
+      7.207264531012681,
+      7.5014385935029955,
+      7.5014385935029955,
+      7.648525624748152,
+      7.795612655993308,
+      7.5014385935029955,
+      7.5014385935029955
+    ],
+    "anchos_validos_m": [
+      7.648525624748152,
+      7.795612655993309,
+      7.648525624748152,
+      7.942699687238465,
+      7.207264531012681,
+      7.354351562257837,
+      7.207264531012681,
+      7.5014385935029955,
+      7.5014385935029955,
+      7.648525624748152,
+      7.795612655993308,
+      7.5014385935029955,
+      7.5014385935029955
+    ],
+    "ancho_preliminar_m": 7.5014385935029955,
+    "confianza": 0.46368900639133637,
+    "nivel_confianza": "media"
+  },
+  "advertencia": "La resolucion calculada corresponde a la escala de Web Mercator. No garantiza la resolucion nativa ni la precision posicional de la fotografia. Los bordes y el ancho deben validarse.",
+  "reporte_pdf": null,
+  "estado_pdf": "pendiente"
+}
