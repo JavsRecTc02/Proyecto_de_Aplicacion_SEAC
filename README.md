@@ -30,7 +30,7 @@ CE-1114 — Proyecto de Aplicación de la Ingeniería en Computadores · II seme
 
 <p><strong>Prototipo funcional sujeto a validación de campo</strong></p>
 
-<p><a href="Manuales/manual_usuario_2026.pdf">Manual de usuario</a> · <a href="Manuales/manual_inst_2026.pdf">Manual de instalación</a> · <a href="#inicio-rapido">Inicio rápido</a></p>
+<p><a href="Manuales/manual_usuario_2026.pdf">Manual de usuario</a> · <a href="Manuales/manual_inst_2026.pdf">Manual de instalación</a> · <a href="Verificación/Documento_Pruebas_V1.1.pdf">Documento de Verificación</a>· <a href="#inicio-rapido">Inicio rápido</a></p>
 
 </div>
 
